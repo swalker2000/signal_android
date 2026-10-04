@@ -48,7 +48,7 @@ class SettingsStore(context: Context) {
 
     fun listDashboards(): List<File> {
         try {
-            ensureDefaultDashboard()
+            ensureBundledDashboards()
         } catch (error: Exception) {
             Log.e(TAG, "Не удалось подготовить стандартную панель", error)
         }
@@ -59,12 +59,22 @@ class SettingsStore(context: Context) {
 
     fun ensureDefaultDashboard() {
         val file = dashboardFile(DEFAULT_HTML)
-        if (!file.exists() || file.length() == 0L) copyAsset(file)
+        if (!file.exists() || file.length() == 0L) copyAsset(DEFAULT_HTML, file)
+    }
+
+    fun ensureBundledDashboards() {
+        ensureDefaultDashboard()
+        val names = app.assets.list("") ?: return
+        for (name in names) {
+            if (!name.endsWith(".html", ignoreCase = true)) continue
+            val file = dashboardFile(name)
+            if (!file.exists() || file.length() == 0L) copyAsset(name, file)
+        }
     }
 
     fun restoreDefault(): File {
         val file = dashboardFile(DEFAULT_HTML)
-        copyAsset(file)
+        copyAsset(DEFAULT_HTML, file)
         return file
     }
 
@@ -98,8 +108,8 @@ class SettingsStore(context: Context) {
         return File(dashboardDir, safe)
     }
 
-    private fun copyAsset(dest: File) {
-        val bytes = app.assets.open(DEFAULT_HTML).use { it.readBytes() }
+    private fun copyAsset(name: String, dest: File) {
+        val bytes = app.assets.open(name).use { it.readBytes() }
         syncWrite(dest, bytes)
     }
 

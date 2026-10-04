@@ -41,6 +41,7 @@ android {
 
 val syncDashboardHtml = tasks.register<Copy>("syncDashboardHtml") {
     from(rootProject.file("ktm_lcd.html"))
+    from(rootProject.file("round_gauges.html"))
     into("src/main/assets")
 }
 

@@ -24,6 +24,7 @@
     <string name="html_invalid">Нужен один HTML-файл панели</string>
     <string name="html_failed">Не удалось прочитать панель</string>
     <string name="html_builtin">Встроенная форма KTM</string>
+    <string name="next">Далее</string>
     <string name="save">Сохранить и показать панель</string>
     <string name="save_need_device">Сначала выберите плату</string>
     <string name="save_need_html">Сначала выберите HTML-форму</string>

@@ -49,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     private val devices = linkedMapOf<String, FoundDevice>()
 
     private var showingDashboard = false
+    private var onFormStep = false
     private var askedPermissions = false
     private var scanning = false
     private var selectedAddress: String? = null
@@ -135,6 +136,10 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (showingDashboard) return
+                if (onFormStep) {
+                    showBluetoothStep()
+                    return
+                }
                 if (store.isReady()) showDashboard(forceReload = false) else finish()
             }
         })
@@ -176,6 +181,7 @@ class MainActivity : AppCompatActivity() {
         binding.settings.scanButton.setOnClickListener { ensurePermissions { startScan() } }
         binding.settings.loadHtml.setOnClickListener { htmlPicker.launch(arrayOf("*/*")) }
         binding.settings.resetHtml.setOnClickListener { restoreDefaultHtml() }
+        binding.settings.nextButton.setOnClickListener { showFormStep() }
         binding.settings.saveSettings.setOnClickListener { saveAndShow() }
         binding.settings.autostart.setOnCheckedChangeListener { _, _ -> refreshAutostartButton() }
     }
@@ -258,6 +264,7 @@ class MainActivity : AppCompatActivity() {
         showLink(TelemetryBus.link)
         binding.settings.telemetryPreview.text = formatTelemetry(TelemetryBus.lastTelemetry)
         refreshAutostartButton()
+        showBluetoothStep()
         val knownAddress = selectedAddress
         val knownName = selectedName
         if (!askedPermissions) {
@@ -352,6 +359,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun dashboardTitle(file: java.io.File): String {
+        return try {
+            val head = file.inputStream().use { input ->
+                val buf = ByteArray(1024)
+                val count = input.read(buf)
+                if (count <= 0) return file.name
+                String(buf, 0, count, Charsets.UTF_8)
+            }
+            Regex("<title>([^<]+)</title>", RegexOption.IGNORE_CASE)
+                .find(head)
+                ?.groupValues
+                ?.get(1)
+                ?.trim()
+                ?.ifBlank { file.name }
+                ?: file.name
+        } catch (_: Exception) {
+            file.name
+        }
+    }
+
     private fun renderHtml() {
         val list = binding.settings.htmlList
         list.removeAllViews()
@@ -366,7 +393,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 ""
             }
-            addChoice(list, file.name, subtitle, file.name == selectedHtml) {
+            addChoice(list, dashboardTitle(file), subtitle, file.name == selectedHtml) {
                 selectedHtml = file.name
                 renderHtml()
             }
@@ -401,7 +428,29 @@ class MainActivity : AppCompatActivity() {
         } else {
             getString(R.string.selected_device, selectedName ?: address)
         }
-        binding.settings.saveSettings.isEnabled = !address.isNullOrBlank()
+        val hasDevice = !address.isNullOrBlank()
+        binding.settings.nextButton.isEnabled = hasDevice
+        binding.settings.saveSettings.isEnabled = hasDevice
+    }
+
+    private fun showBluetoothStep() {
+        onFormStep = false
+        binding.settings.bluetoothPanel.isVisible = true
+        binding.settings.htmlPanel.isVisible = false
+        binding.settings.nextButton.isVisible = true
+        binding.settings.saveSettings.isVisible = false
+    }
+
+    private fun showFormStep() {
+        if (selectedAddress.isNullOrBlank()) {
+            Toast.makeText(this, R.string.save_need_device, Toast.LENGTH_SHORT).show()
+            return
+        }
+        onFormStep = true
+        binding.settings.bluetoothPanel.isVisible = false
+        binding.settings.htmlPanel.isVisible = true
+        binding.settings.nextButton.isVisible = false
+        binding.settings.saveSettings.isVisible = true
     }
 
     private fun restoreDefaultHtml() {
