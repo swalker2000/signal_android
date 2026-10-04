@@ -1,0 +1,39 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.lpkm.signal.shared" >
+4
+5    <uses-sdk android:minSdkVersion="29" />
+5-->INJECTED
+5-->INJECTED
+6
+7    <application>
+7-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:3:5-18:19
+8
+9        <!-- Minimum Car API level -->
+10        <meta-data
+10-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:5:9-7:33
+11            android:name="androidx.car.app.minCarApiLevel"
+11-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:6:13-59
+12            android:value="1" />
+12-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:7:13-30
+13
+14        <service
+14-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:9:9-17:19
+15            android:name="com.lpkm.signal.shared.MyCarAppService"
+15-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:10:13-66
+16            android:exported="true" >
+16-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:11:13-36
+17            <intent-filter>
+17-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:12:13-16:29
+18                <action android:name="androidx.car.app.CarAppService" />
+18-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:13:17-73
+18-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:13:25-70
+19                <!-- Other categories: NAVIGATION, CHARGING, IOT, ... -->
+20                <category android:name="androidx.car.app.category.POI" />
+20-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:15:17-74
+20-->/Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:15:27-71
+21            </intent-filter>
+22        </service>
+23    </application>
+24
+25</manifest>

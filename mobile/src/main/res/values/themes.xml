@@ -1,0 +1,18 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Base.Theme.Signal" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/dash_accent</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSurface">@color/dash_bg</item>
+        <item name="colorOnSurface">@color/dash_ink</item>
+        <item name="android:colorBackground">@color/dash_bg</item>
+        <item name="android:statusBarColor">@color/dash_bg</item>
+        <item name="android:navigationBarColor">@color/dash_bg</item>
+        <item name="android:windowBackground">@color/dash_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textColorPrimary">@color/dash_ink</item>
+        <item name="android:textColorSecondary">@color/dash_muted</item>
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
+    </style>
+
+    <style name="Theme.Signal" parent="Base.Theme.Signal" />
+</resources>

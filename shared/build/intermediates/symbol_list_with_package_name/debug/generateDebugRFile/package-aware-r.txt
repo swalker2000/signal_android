@@ -1,0 +1,2 @@
+com.lpkm.signal.shared
+xml automotive_app_desc

@@ -1,0 +1,103 @@
+package com.lpkm.signal
+
+data class Telemetry(
+    val rpm: Double? = null,
+    val speed: Double? = null,
+    val gear: String? = null,
+    val temp: Double? = null,
+    val fuel: Double? = null,
+    val lights: Int? = null,
+    val turnLeft: Boolean? = null,
+    val turnRight: Boolean? = null,
+) {
+    fun isBlank(): Boolean {
+        return rpm == null && speed == null && gear == null && temp == null &&
+            fuel == null && lights == null && turnLeft == null && turnRight == null
+    }
+
+    fun withFrame(param: Int, value: Int): Telemetry {
+        return when (param) {
+            SignalProtocol.SPEED -> copy(speed = value.toDouble())
+            SignalProtocol.GASOLINE -> copy(fuel = value.toDouble())
+            SignalProtocol.RPM -> copy(rpm = value.toDouble())
+            SignalProtocol.TEMPERATURE -> copy(temp = value.toDouble())
+            SignalProtocol.GEAR -> copy(gear = gearLabel(value))
+            SignalProtocol.LIGHTS -> copy(lights = value)
+            SignalProtocol.TURN_LEFT -> copy(turnLeft = value != 0)
+            SignalProtocol.TURN_RIGHT -> copy(turnRight = value != 0)
+            else -> this
+        }
+    }
+}
+
+object SignalProtocol {
+    const val STX = 0x02
+    const val STP = 0x03
+    const val FRAME_LEN = 5
+
+    const val SPEED = 0x01
+    const val GASOLINE = 0x02
+    const val RPM = 0x03
+    const val TEMPERATURE = 0x04
+    const val GEAR = 0x05
+    const val LIGHTS = 0x06
+    const val TURN_LEFT = 0x07
+    const val TURN_RIGHT = 0x08
+
+    const val CMD_TELM = "TELM"
+    const val CMD_PULS = "PULS"
+
+    fun frame(param: Int, value: Int): ByteArray {
+        return byteArrayOf(
+            STX.toByte(),
+            param.toByte(),
+            (value shr 8).toByte(),
+            value.toByte(),
+            STP.toByte(),
+        )
+    }
+}
+
+class FrameDecoder {
+    private val pending = ArrayList<Byte>()
+
+    fun reset() {
+        pending.clear()
+    }
+
+    fun append(data: ByteArray): List<Pair<Int, Int>> {
+        data.forEach { pending.add(it) }
+        val frames = ArrayList<Pair<Int, Int>>()
+        while (pending.size >= SignalProtocol.FRAME_LEN) {
+            val stx = pending.indexOf(SignalProtocol.STX.toByte())
+            if (stx < 0) {
+                pending.clear()
+                break
+            }
+            if (stx > 0) {
+                repeat(stx) { pending.removeAt(0) }
+            }
+            if (pending.size < SignalProtocol.FRAME_LEN) break
+            if ((pending[4].toInt() and 0xFF) != SignalProtocol.STP) {
+                pending.removeAt(0)
+                continue
+            }
+            val param = pending[1].toInt() and 0xFF
+            val raw = ((pending[2].toInt() and 0xFF) shl 8) or (pending[3].toInt() and 0xFF)
+            val value = raw.toShort().toInt()
+            repeat(SignalProtocol.FRAME_LEN) { pending.removeAt(0) }
+            frames.add(param to value)
+        }
+        if (pending.size > 64) {
+            pending.subList(0, pending.size - 8).clear()
+        }
+        return frames
+    }
+}
+
+private fun gearLabel(code: Int): String {
+    if (code <= 0) return "N"
+    val symbol = code.toChar()
+    if (symbol == '0' || symbol == 'N' || symbol == 'n') return "N"
+    return symbol.toString()
+}

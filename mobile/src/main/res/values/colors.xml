@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="dash_bg">#1A1F24</color>
+    <color name="dash_ink">#E8EAED</color>
+    <color name="dash_muted">#9AA3AD</color>
+    <color name="dash_accent">#FF6600</color>
+    <color name="dash_card">#242A31</color>
+</resources>

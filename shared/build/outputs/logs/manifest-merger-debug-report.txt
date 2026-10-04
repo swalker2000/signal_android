@@ -1,0 +1,40 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:1:1-19:12
+INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:1:1-19:12
+	package
+		INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:1:11-69
+application
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:3:5-18:19
+meta-data#androidx.car.app.minCarApiLevel
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:5:9-7:33
+	android:value
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:7:13-30
+	android:name
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:6:13-59
+service#com.lpkm.signal.shared.MyCarAppService
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:9:9-17:19
+	android:exported
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:11:13-36
+	android:name
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:10:13-66
+intent-filter#action:name:androidx.car.app.CarAppService+category:name:androidx.car.app.category.POI
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:12:13-16:29
+action#androidx.car.app.CarAppService
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:13:17-73
+	android:name
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:13:25-70
+category#androidx.car.app.category.POI
+ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:15:17-74
+	android:name
+		ADDED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml:15:27-71
+uses-sdk
+INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml
+INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/AndroidManifest.xml

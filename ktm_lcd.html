@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>KTM LCD</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--ink);
+        }
+
+        :root, body[data-theme="day"] {
+            --bg: #b8bcc6;
+            --ink: #1a1f24;
+            --on-ink: #e8eaed;
+            --seg: #1a1f24;
+            --seg-dim: 0.14;
+            --menu-bg: #1a1f24;
+            --menu-fg: #e8eaed;
+            --menu-option-bg: rgba(255, 255, 255, 0.08);
+            --menu-option-active-bg: #e8eaed;
+            --menu-option-active-fg: #1a1f24;
+        }
+
+        body[data-theme="night"] {
+            --bg: #1a1f24;
+            --ink: #e8eaed;
+            --on-ink: #1a1f24;
+            --seg: #e8eaed;
+            --seg-dim: 0.14;
+            --surface-muted: #ccd1d7;
+            --menu-bg: var(--surface-muted);
+            --menu-fg: #1a1f24;
+            --menu-option-bg: rgba(0, 0, 0, 0.08);
+            --menu-option-active-bg: #1a1f24;
+            --menu-option-active-fg: #e8eaed;
+        }
+
+        body { min-height: 100svh; }
+
+        .panel {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        .tach-wrap {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+        }
+
+        #tachCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* Треугольник передачи — прямой угол в (0,0), гипотенуза ∥ диагонали тахометра */
+        .gear {
+            position: absolute;
+            left: 0;
+            top: 0;
+            z-index: 4;
+            pointer-events: none;
+        }
+
+        .gear-shape {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .gear-label {
+            position: absolute;
+            color: var(--on-ink);
+            font-size: calc(var(--u) * var(--gear-font-u));
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -0.02em;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        .center-block {
+            position: absolute;
+            right: 16%;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+
+        .unit {
+            font-size: calc(var(--u) * 4.8);
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            margin-bottom: calc(var(--u) * 0.2);
+            transform: translateY(calc(var(--u) * 0.6));
+        }
+
+        .speed-value {
+            font-size: calc(var(--u) * 50);
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.04em;
+            line-height: 1;
+            text-align: right;
+        }
+
+        .metric-temp {
+            position: absolute;
+            right: 2.5%;
+            top: 53%;
+            transform: translateY(-50%);
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: calc(var(--u) * 1.1);
+        }
+
+        .temp-value {
+            font-size: calc(var(--u) * 3.8);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.02em;
+            line-height: 1;
+            text-align: right;
+        }
+
+        .metric-fuel {
+            position: absolute;
+            right: 2%;
+            bottom: 5%;
+            z-index: 3;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: calc(var(--u) * 2);
+        }
+
+        .metric-fuel.tank-left .icon-fuel {
+            transform: scaleX(-1);
+        }
+
+        .bar-stack {
+            display: flex;
+            gap: calc(var(--u) * 0.35);
+        }
+
+        .bar-stack.vertical {
+            flex-direction: column-reverse;
+            height: calc(var(--u) * 40);
+            gap: calc(var(--u) * 0.2);
+        }
+
+        .bar-stack.horizontal {
+            flex-direction: row;
+            width: 43vw;
+            height: calc(var(--u) * 8);
+            gap: calc(var(--u) * 0.2);
+        }
+
+        .bar-stack.horizontal .seg:nth-child(2n):not(:last-child) {
+            margin-right: calc(var(--u) * 0.8);
+        }
+
+        .seg {
+            background: var(--seg);
+            opacity: var(--seg-dim);
+            transition: opacity 0.12s ease;
+        }
+
+        .bar-stack.vertical .seg {
+            width: calc(var(--u) * 8);
+            flex: 1;
+            min-height: 0;
+        }
+
+        .bar-stack.horizontal .seg {
+            flex: 1;
+            min-width: 0;
+            height: 100%;
+        }
+
+        .seg.on { opacity: 1; }
+
+        .metric-fuel.low-fuel .seg.on { opacity: 0.5; }
+        .metric-fuel.low-fuel .seg.on:last-child,
+        .metric-fuel.low-fuel .seg.on:nth-last-child(2) { opacity: 1; }
+
+        .icon {
+            width: calc(var(--u) * 2.6);
+            height: calc(var(--u) * 2.6);
+            fill: var(--seg);
+            flex-shrink: 0;
+        }
+
+        .icon-temp {
+            width: calc(var(--u) * 8);
+            height: calc(var(--u) * 8);
+        }
+
+        .icon-fuel {
+            width: calc(var(--u) * 8);
+            height: calc(var(--u) * 8);
+            fill: var(--seg);
+            flex-shrink: 0;
+        }
+
+        .fuel-value {
+            font-size: calc(var(--u) * 6);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.02em;
+            width: 4.2ch;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .clock {
+            position: absolute;
+            left: 20%;
+            bottom: 5%;
+            z-index: 3;
+            font-size: calc(var(--u) * 8);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+
+        .clock:active { opacity: 0.75; }
+
+        .settings-menu {
+            position: absolute;
+            left: 20%;
+            bottom: calc(5% + var(--u) * 14);
+            z-index: 6;
+            width: max-content;
+            min-width: calc(var(--u) * 52);
+            background: var(--menu-bg);
+            color: var(--menu-fg);
+            padding: calc(var(--u) * 2);
+            display: none;
+            flex-direction: column;
+            gap: calc(var(--u) * 1.6);
+        }
+
+        .settings-menu.open { display: flex; }
+
+        .settings-section {
+            display: flex;
+            flex-direction: column;
+            gap: calc(var(--u) * 0.8);
+            width: 100%;
+        }
+
+        .settings-section-label {
+            font-size: calc(var(--u) * 4);
+            font-weight: 700;
+            letter-spacing: 0.06em;
+        }
+
+        .settings-item-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: calc(var(--u) * 0.6);
+        }
+
+        .settings-item-options--pair .settings-option {
+            flex: 1 1 0;
+            min-width: 0;
+            text-align: center;
+        }
+
+        .settings-item-options--rpm .settings-option {
+            padding-left: calc(var(--u) * 5.6);
+            padding-right: calc(var(--u) * 5.6);
+        }
+
+        .settings-option {
+            border: none;
+            background: var(--menu-option-bg);
+            color: var(--menu-fg);
+            font-size: calc(var(--u) * 4.8);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            padding: calc(var(--u) * 1) calc(var(--u) * 1.6);
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .settings-option:active { background: var(--menu-option-bg); opacity: 0.85; }
+        .settings-option.active {
+            background: var(--menu-option-active-bg);
+            color: var(--menu-option-active-fg);
+        }
+    </style>
+</head>
+<body data-theme="day">
+<div class="panel">
+    <div class="tach-wrap">
+        <canvas id="tachCanvas"></canvas>
+    </div>
+    <div class="gear" id="gearWrap">
+        <svg class="gear-shape" aria-hidden="true">
+            <polygon id="gearPolygon" fill="#1a1f24"></polygon>
+        </svg>
+        <span class="gear-label" id="gearText">N</span>
+    </div>
+
+    <div class="center-block">
+        <div class="unit">KM/H</div>
+        <div class="speed-value" id="speedText">0</div>
+    </div>
+
+    <div class="metric-temp" id="metricTemp">
+        <span class="temp-value" id="tempText">—</span>
+        <div class="bar-stack vertical" id="tempBars"></div>
+        <svg class="icon icon-temp" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 2a4 4 0 0 0-4 4v8.1a6 6 0 1 0 8 0V6a4 4 0 0 0-4-4zm0 18a4 4 0 0 1-2.3-7.3V6a2.3 2.3 0 1 1 4.6 0v6.7A4 4 0 0 1 12 20z"/>
+        </svg>
+    </div>
+
+    <div class="metric-fuel" id="metricFuel">
+        <svg class="icon-fuel" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="m10.781 0-.625.719 1.188 1.094.125.125-.25.28c-.4.401-.113.919.031 1.063l.75.75V10c0 1-.392 1-.5 1s-.5 0-.5-1V6c0-1.28-1-2-2-2V2c0-.551-.425-1-1-1H2c-.6 0-1 .425-1 1v12h8V5s1 0 1 1v4c0 2 1.24 2 1.5 2 .276 0 1.5 0 1.5-2V3c0-1-.286-1.21-.625-1.531zM2 3h6v3H2z"/>
+        </svg>
+        <div class="bar-stack horizontal" id="fuelBars"></div>
+        <span class="fuel-value" id="fuelText">—</span>
+    </div>
+
+    <div class="clock" id="clockText" role="button" tabindex="0" aria-label="Часы и настройки">00:00</div>
+
+    <div class="settings-menu" id="settingsMenu" aria-hidden="true">
+        <div class="settings-section">
+            <div class="settings-section-label">Тема</div>
+            <div class="settings-item-options settings-item-options--pair" id="themeOptions"></div>
+        </div>
+        <div class="settings-section">
+            <div class="settings-section-label">Макс. RPM</div>
+            <div class="settings-item-options settings-item-options--rpm" id="maxRpmOptions"></div>
+        </div>
+        <div class="settings-section">
+            <div class="settings-section-label">Топливный бак</div>
+            <div class="settings-item-options settings-item-options--pair" id="fuelSideOptions"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ═══════════════════════════════════════════════════════════════════
+    // TACH_TARGET — утверждённая геометрия и стиль тахометра KTM LCD.
+    // Не менять при правках скорости, часов, temp/fuel и прочего UI.
+    // .gear — прямой угол в углу экрана, гипотенуза ∥ диагонали тахометра.
+    // ═══════════════════════════════════════════════════════════════════
+    const TACH_TARGET = Object.freeze({
+        rpm: {
+            defaultMax: 11000,
+            presets: [4000, 8000, 10000, 11000, 12000],
+            refMax: 11000,
+            refBend1: 2500,
+            refBend2: 5000,
+        },
+        layout: {
+            screenPadRatio: 0.02,
+            gearWidthU: 15,
+            gearSpanU: 32 * 4 / 3,
+            gearFontU: 16,
+            leadingGapU: 0.5,
+            topYU: 21,
+            bottomYRatio: 0.90,
+            bendYRatio: 0.54,
+        },
+        stroke: {
+            thinU: 0.5,
+            thickU: 10,
+            gapU: 1,
+            cornerU: 2.5,
+            ribbonCapLeadU: 0.2,
+            ribbonCapLeadMin: 0.35,
+        },
+        labels: {
+            fontU: 5,
+            fillLeadU: 0.8,
+            offsetLow: { ox: -0.04, oy: 0 },
+            offsetMid: { ox: -0.05, oy: 0.06 },
+            offsetHigh: { ox: -0.10, oy: 0.12 },
+        },
+        colors: {
+            dark: '#1a1f24',
+            light: '#e8eaed',
+        },
+    });
+
+    const TEMP_SEGMENTS = 10;
+    const FUEL_SEGMENTS = 16;
+    const MAX_RPM_STORAGE_KEY = 'ktmMaxRpm';
+    const FUEL_SIDE_STORAGE_KEY = 'ktmFuelSide';
+    const THEME_STORAGE_KEY = 'ktmTheme';
+    const FUEL_SIDES = ['right', 'left'];
+    const THEMES = ['day', 'night'];
+    const UI_THEMES = {
+        day: { dark: '#1a1f24', light: '#e8eaed' },
+        night: { dark: '#e8eaed', light: '#1a1f24' },
+    };
+
+    let tachMaxRpm = TACH_TARGET.rpm.defaultMax;
+    let fuelSide = 'right';
+    let currentTheme = 'day';
+    let targetRpm = 0;
+    let displayRpm = 0;
+
+    const gearText = document.getElementById('gearText');
+    const gearWrap = document.getElementById('gearWrap');
+    const gearPolygon = document.getElementById('gearPolygon');
+    const speedText = document.getElementById('speedText');
+    const clockText = document.getElementById('clockText');
+    const settingsMenu = document.getElementById('settingsMenu');
+    const maxRpmOptions = document.getElementById('maxRpmOptions');
+    const fuelSideOptions = document.getElementById('fuelSideOptions');
+    const themeOptions = document.getElementById('themeOptions');
+    const metricTemp = document.getElementById('metricTemp');
+    const metricFuel = document.getElementById('metricFuel');
+    const tempBars = document.getElementById('tempBars');
+    const tempText = document.getElementById('tempText');
+    const fuelBars = document.getElementById('fuelBars');
+    const fuelText = document.getElementById('fuelText');
+    const tachCanvas = document.getElementById('tachCanvas');
+    const tachCtx = tachCanvas.getContext('2d');
+
+    for (let i = 0; i < TEMP_SEGMENTS; i++) {
+        tempBars.appendChild(document.createElement('div')).className = 'seg';
+    }
+    for (let i = 0; i < FUEL_SEGMENTS; i++) {
+        fuelBars.appendChild(document.createElement('div')).className = 'seg';
+    }
+
+    function tachRpmScale() {
+        const max = tachMaxRpm;
+        const { refMax, refBend1, refBend2 } = TACH_TARGET.rpm;
+        const bend1 = max * refBend1 / refMax;
+        const bend2 = max * refBend2 / refMax;
+        const labels = [];
+        for (let rpm = 1000; rpm <= max; rpm += 1000) {
+            labels.push({ rpm, text: String(rpm / 1000) });
+        }
+        return { max, bend1, bend2, labels };
+    }
+
+    function coerceMaxRpm(rpm) {
+        const n = Number(rpm);
+        if (!Number.isFinite(n)) return null;
+        const val = Math.round(n / 1000) * 1000;
+        if (val < 1000 || val > 20000) return null;
+        return val;
+    }
+
+    function createMaxRpmButton(value) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-option';
+        btn.dataset.maxRpm = String(value);
+        btn.textContent = (value / 1000) + 'k';
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setMaxRpm(value);
+        });
+        return btn;
+    }
+
+    function removeCustomMaxRpmButton() {
+        const custom = maxRpmOptions.querySelector('[data-custom-max-rpm]');
+        if (custom) custom.remove();
+    }
+
+    function ensureMaxRpmOptionsUi() {
+        removeCustomMaxRpmButton();
+        if (!TACH_TARGET.rpm.presets.includes(tachMaxRpm)) {
+            const btn = createMaxRpmButton(tachMaxRpm);
+            btn.dataset.customMaxRpm = '1';
+            maxRpmOptions.appendChild(btn);
+        }
+    }
+
+    function initMaxRpmOptions() {
+        TACH_TARGET.rpm.presets.forEach((preset) => {
+            maxRpmOptions.appendChild(createMaxRpmButton(preset));
+        });
+    }
+
+    function getThemeColors() {
+        return UI_THEMES[currentTheme] || UI_THEMES.day;
+    }
+
+    function syncSettingsUi() {
+        maxRpmOptions.querySelectorAll('.settings-option').forEach((btn) => {
+            btn.classList.toggle('active', Number(btn.dataset.maxRpm) === tachMaxRpm);
+        });
+        fuelSideOptions.querySelectorAll('.settings-option').forEach((btn) => {
+            btn.classList.toggle('active', btn.dataset.fuelSide === fuelSide);
+        });
+        themeOptions.querySelectorAll('.settings-option').forEach((btn) => {
+            btn.classList.toggle('active', btn.dataset.panelTheme === currentTheme);
+        });
+    }
+
+    function applyFuelSide() {
+        metricFuel.classList.toggle('tank-left', fuelSide === 'left');
+    }
+
+    function setFuelSide(side) {
+        if (!FUEL_SIDES.includes(side)) return;
+        fuelSide = side;
+        localStorage.setItem(FUEL_SIDE_STORAGE_KEY, side);
+        applyFuelSide();
+        syncSettingsUi();
+    }
+
+    function setSettingsOpen(open) {
+        settingsMenu.classList.toggle('open', open);
+        settingsMenu.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+
+    function setMaxRpm(rpm) {
+        const val = coerceMaxRpm(rpm);
+        if (val == null) return;
+        tachMaxRpm = val;
+        localStorage.setItem(MAX_RPM_STORAGE_KEY, String(val));
+        targetRpm = Math.min(targetRpm, val);
+        displayRpm = Math.min(displayRpm, val);
+        ensureMaxRpmOptionsUi();
+        syncSettingsUi();
+        drawTach();
+    }
+
+    window.setMaxRpm = setMaxRpm;
+
+    function applyTheme(theme) {
+        if (!THEMES.includes(theme)) return;
+        currentTheme = theme;
+        document.body.setAttribute('data-theme', theme);
+        syncSettingsUi();
+        updateGearLayout();
+        drawTach();
+    }
+
+    function setTheme(theme) {
+        applyTheme(theme);
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+    }
+
+    function initSettings() {
+        const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+        if (THEMES.includes(savedTheme)) {
+            applyTheme(savedTheme);
+        }
+
+        [
+            { theme: 'day', label: 'День' },
+            { theme: 'night', label: 'Ночь' },
+        ].forEach(({ theme, label }) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'settings-option';
+            btn.dataset.panelTheme = theme;
+            btn.textContent = label;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setTheme(theme);
+            });
+            themeOptions.appendChild(btn);
+        });
+
+        initMaxRpmOptions();
+        const savedVal = coerceMaxRpm(Number(localStorage.getItem(MAX_RPM_STORAGE_KEY)));
+        if (savedVal != null) {
+            setMaxRpm(savedVal);
+        } else {
+            syncSettingsUi();
+        }
+
+        const savedSide = localStorage.getItem(FUEL_SIDE_STORAGE_KEY);
+        if (FUEL_SIDES.includes(savedSide)) {
+            fuelSide = savedSide;
+        }
+        applyFuelSide();
+
+        [
+            { side: 'right', label: 'Справа' },
+            { side: 'left', label: 'Слева' },
+        ].forEach(({ side, label }) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'settings-option';
+            btn.dataset.fuelSide = side;
+            btn.textContent = label;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setFuelSide(side);
+            });
+            fuelSideOptions.appendChild(btn);
+        });
+
+        clockText.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setSettingsOpen(!settingsMenu.classList.contains('open'));
+        });
+        settingsMenu.addEventListener('click', (e) => e.stopPropagation());
+        document.addEventListener('click', () => setSettingsOpen(false));
+        syncSettingsUi();
+    }
+
+    function updateUnits() {
+        const u = Math.min(window.innerWidth, window.innerHeight) / 100;
+        const root = document.documentElement.style;
+        root.setProperty('--u', u + 'px');
+        root.setProperty('--gear-font-u', String(TACH_TARGET.layout.gearFontU));
+    }
+
+    function getGearFill() {
+        const surface = getComputedStyle(document.body).getPropertyValue('--surface-muted').trim();
+        if (surface) return surface;
+        return getThemeColors().dark;
+    }
+
+    function updateGearLayout() {
+        const panel = document.querySelector('.panel');
+        const w = panel.clientWidth;
+        const h = panel.clientHeight;
+        const g = tachGeometry(w, h);
+        const { layout } = TACH_TARGET;
+        const spanX = g.u * layout.gearSpanU;
+        const diagDx = g.xD - g.x0;
+        const diagDy = g.yD - g.yV;
+        const spanY = spanX * (-diagDy / diagDx);
+
+        const corner = { x: 0, y: 0 };
+        const topRight = { x: spanX, y: 0 };
+        const bottomLeft = { x: 0, y: spanY };
+
+        gearWrap.style.left = '0';
+        gearWrap.style.top = '0';
+        gearWrap.style.width = spanX + 'px';
+        gearWrap.style.height = spanY + 'px';
+
+        gearPolygon.setAttribute(
+            'points',
+            `${corner.x},${corner.y} ${topRight.x},${topRight.y} ${bottomLeft.x},${bottomLeft.y}`,
+        );
+        gearPolygon.setAttribute('fill', getGearFill());
+
+        gearText.style.left = (spanX / 4) + 'px';
+        gearText.style.top = (spanY / 4) + 'px';
+    }
+
+    function resizeTach() {
+        const rect = tachCanvas.parentElement.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        tachCanvas.width = rect.width * dpr;
+        tachCanvas.height = rect.height * dpr;
+        tachCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function tachGeometry(w, h) {
+        const u = Math.min(w, h) / 100;
+        const { layout, stroke } = TACH_TARGET;
+        const screenPad = w * layout.screenPadRatio;
+        const leadingStartU = layout.gearWidthU + layout.leadingGapU;
+        const outerInsetU = leadingStartU - (stroke.thickU + stroke.gapU);
+        const x0 = screenPad + u * leadingStartU;
+        const y0 = h * layout.bottomYRatio;
+        const yV = h * layout.bendYRatio;
+        const yD = u * layout.topYU;
+        const dy = yV - yD;
+        const xD = x0 + dy;
+        const xEnd = w - screenPad - u * outerInsetU;
+
+        const vertLen = y0 - yV;
+        const diagLen = Math.hypot(xD - x0, yV - yD);
+        const horizLen = xEnd - xD;
+        const total = vertLen + diagLen + horizLen;
+
+        return { x0, y0, xV: x0, yV, xD, yD, xEnd, vertLen, diagLen, horizLen, total, u };
+    }
+
+    function rpmToDist(rpm, g) {
+        const { max, bend1, bend2 } = tachRpmScale();
+        const r = Math.max(0, Math.min(max, rpm));
+        if (r <= bend1) {
+            return (r / bend1) * g.vertLen;
+        }
+        if (r <= bend2) {
+            return g.vertLen + ((r - bend1) / (bend2 - bend1)) * g.diagLen;
+        }
+        return g.vertLen + g.diagLen +
+            ((r - bend2) / (max - bend2)) * g.horizLen;
+    }
+
+    function rpmToT(rpm, g) {
+        return rpmToDist(rpm, g) / g.total;
+    }
+
+    function pointOnDist(d, g) {
+        const { x0, y0, xV, yV, xD, yD, xEnd, vertLen, diagLen, horizLen } = g;
+
+        if (d <= vertLen) {
+            return { x: x0, y: y0 - d };
+        }
+        if (d <= vertLen + diagLen) {
+            const t = (d - vertLen) / diagLen;
+            return { x: xV + (xD - xV) * t, y: yV + (yD - yV) * t };
+        }
+        const t = (d - vertLen - diagLen) / horizLen;
+        return { x: xD + (xEnd - xD) * t, y: yD };
+    }
+
+    function segNormal(dx, dy) {
+        const len = Math.hypot(dx, dy) || 1;
+        // Нормаль влево-вверх от направления пути — сторона цифр и заливки
+        return { nx: -dy / len, ny: dx / len };
+    }
+
+    function miterOffset(px, py, n1, n2, off) {
+        const bx = n1.nx + n2.nx;
+        const by = n1.ny + n2.ny;
+        const bl = Math.hypot(bx, by) || 1;
+        const mx = bx / bl;
+        const my = by / bl;
+        const dot = mx * n1.nx + my * n1.ny;
+        const scale = Math.abs(dot) > 0.01 ? off / dot : off;
+        return { x: px + mx * scale, y: py + my * scale };
+    }
+
+    function parallelGeometry(g, off) {
+        const { x0, y0, xV, yV, xD, yD, xEnd, vertLen, diagLen, horizLen, total } = g;
+        const nV = segNormal(0, yV - y0);
+        const nD = segNormal(xD - x0, yD - yV);
+        const nH = segNormal(xEnd - xD, 0);
+
+        return {
+            start: { x: x0 + nV.nx * off, y: y0 + nV.ny * off },
+            c1: miterOffset(xV, yV, nV, nD, off),
+            c2: miterOffset(xD, yD, nD, nH, off),
+            end: { x: xEnd + nH.nx * off, y: yD + nH.ny * off },
+            vertLen,
+            diagLen,
+            horizLen,
+            total,
+        };
+    }
+
+    function normalAtDist(d, g) {
+        if (d <= g.vertLen) return segNormal(0, g.yV - g.y0);
+        if (d <= g.vertLen + g.diagLen) return segNormal(g.xD - g.x0, g.yD - g.yV);
+        return segNormal(g.xEnd - g.xD, 0);
+    }
+
+    function pointOnDistWithOffset(d, g, off) {
+        const p = pointOnDist(d, g);
+        const n = normalAtDist(d, g);
+        return { x: p.x + n.nx * off, y: p.y + n.ny * off };
+    }
+
+    function filletCorner(pPrev, pCorner, pNext, r) {
+        const ax = pPrev.x - pCorner.x;
+        const ay = pPrev.y - pCorner.y;
+        const bx = pNext.x - pCorner.x;
+        const by = pNext.y - pCorner.y;
+        const la = Math.hypot(ax, ay) || 1;
+        const lb = Math.hypot(bx, by) || 1;
+        const uax = ax / la;
+        const uay = ay / la;
+        const ubx = bx / lb;
+        const uby = by / lb;
+        const dot = Math.max(-1, Math.min(1, uax * ubx + uay * uby));
+        const angle = Math.acos(dot);
+        const trim = Math.min(r / Math.tan(angle / 2), la * 0.45, lb * 0.45);
+        const enter = { x: pCorner.x + uax * trim, y: pCorner.y + uay * trim };
+        const exit = { x: pCorner.x + ubx * trim, y: pCorner.y + uby * trim };
+        const nx = uax + ubx;
+        const ny = uay + uby;
+        const nl = Math.hypot(nx, ny) || 1;
+        const distToCenter = r / (Math.sin(angle / 2) || 1);
+        const center = {
+            x: pCorner.x + (nx / nl) * distToCenter,
+            y: pCorner.y + (ny / nl) * distToCenter,
+        };
+        const startA = Math.atan2(enter.y - center.y, enter.x - center.x);
+        const endA = Math.atan2(exit.y - center.y, exit.x - center.x);
+        let sweep = endA - startA;
+        while (sweep > Math.PI) sweep -= Math.PI * 2;
+        while (sweep < -Math.PI) sweep += Math.PI * 2;
+        return {
+            enter,
+            exit,
+            center,
+            startA,
+            endA,
+            arcLen: Math.abs(r * sweep),
+            trim,
+            ccw: sweep < 0,
+        };
+    }
+
+    function dist2d(a, b) {
+        return Math.hypot(b.x - a.x, b.y - a.y);
+    }
+
+    function makeFilletPlan(pg, r) {
+        const { start, c1, c2, end } = pg;
+        const fc1 = filletCorner(start, c1, c2, r);
+        const fc2 = filletCorner(c1, c2, end, r);
+        return [
+            { type: 'line', from: start, to: fc1.enter, len: dist2d(start, fc1.enter) },
+            { type: 'arc', corner: fc1, len: fc1.arcLen, radius: r },
+            { type: 'line', from: fc1.exit, to: fc2.enter, len: dist2d(fc1.exit, fc2.enter) },
+            { type: 'arc', corner: fc2, len: fc2.arcLen, radius: r },
+            { type: 'line', from: fc2.exit, to: end, len: dist2d(fc2.exit, end) },
+        ];
+    }
+
+    function effectiveCornerR(pg, r) {
+        return Math.min(
+            r,
+            pg.vertLen * 0.35,
+            pg.diagLen * 0.35,
+            pg.horizLen * 0.15,
+        );
+    }
+
+    function traceFilletPath(ctx, pg, maxDist, r) {
+        const radius = effectiveCornerR(pg, r);
+        const plan = makeFilletPlan(pg, radius);
+        let remain = maxDist;
+        let moved = false;
+
+        ctx.beginPath();
+
+        for (const seg of plan) {
+            if (remain <= 0) break;
+
+            if (seg.type === 'line') {
+                const use = Math.min(remain, seg.len);
+                const t = seg.len > 0 ? use / seg.len : 1;
+                const tx = seg.from.x + (seg.to.x - seg.from.x) * t;
+                const ty = seg.from.y + (seg.to.y - seg.from.y) * t;
+                if (!moved) {
+                    ctx.moveTo(seg.from.x, seg.from.y);
+                    moved = true;
+                }
+                ctx.lineTo(tx, ty);
+                remain -= use;
+                continue;
+            }
+
+            const use = Math.min(remain, seg.len);
+            const c = seg.corner;
+            if (!moved) {
+                ctx.moveTo(c.enter.x, c.enter.y);
+                moved = true;
+            }
+            if (use >= seg.len - 0.001) {
+                ctx.arc(c.center.x, c.center.y, seg.radius, c.startA, c.endA, c.ccw);
+            } else {
+                const t = seg.len > 0 ? use / seg.len : 1;
+                let sweep = c.endA - c.startA;
+                while (sweep > Math.PI) sweep -= Math.PI * 2;
+                while (sweep < -Math.PI) sweep += Math.PI * 2;
+                const endA = c.startA + sweep * t;
+                ctx.arc(c.center.x, c.center.y, seg.radius, c.startA, endA, c.ccw);
+            }
+            remain -= use;
+        }
+    }
+
+    function sampleFilletPoints(pg, maxDist, r, arcSteps = 10) {
+        const radius = effectiveCornerR(pg, r);
+        const plan = makeFilletPlan(pg, radius);
+        const points = [];
+        let remain = maxDist;
+
+        for (const seg of plan) {
+            if (remain <= 0) break;
+
+            if (seg.type === 'line') {
+                const use = Math.min(remain, seg.len);
+                if (points.length === 0) {
+                    points.push({ x: seg.from.x, y: seg.from.y });
+                }
+                const t = seg.len > 0 ? use / seg.len : 1;
+                points.push({
+                    x: seg.from.x + (seg.to.x - seg.from.x) * t,
+                    y: seg.from.y + (seg.to.y - seg.from.y) * t,
+                });
+                remain -= use;
+                continue;
+            }
+
+            const use = Math.min(remain, seg.len);
+            const c = seg.corner;
+            const steps = Math.max(3, Math.ceil(arcSteps * (use / seg.len)));
+            for (let i = 0; i <= steps; i++) {
+                if (i === 0 && points.length > 0) continue;
+                const t = steps > 0 ? (i / steps) * (use / seg.len) : 0;
+                let sweep = c.endA - c.startA;
+                while (sweep > Math.PI) sweep -= Math.PI * 2;
+                while (sweep < -Math.PI) sweep += Math.PI * 2;
+                const a = c.startA + sweep * t;
+                points.push({
+                    x: c.center.x + seg.radius * Math.cos(a),
+                    y: c.center.y + seg.radius * Math.sin(a),
+                });
+            }
+            remain -= use;
+        }
+        return points;
+    }
+
+    function ribbonCapPoints(g, spineDist, innerOff, outerOff) {
+        return {
+            inner: pointOnDistWithOffset(spineDist, g, innerOff),
+            outer: pointOnDistWithOffset(spineDist, g, outerOff),
+        };
+    }
+
+    function fillThickRibbon(ctx, g, displayRpm, thickCenterOff, thickW, cornerR, color) {
+        const innerOff = thickCenterOff + thickW / 2;
+        const outerOff = thickCenterOff - thickW / 2;
+        const spineDist = rpmToDist(displayRpm, g);
+        if (spineDist <= 0.001) return;
+
+        const innerPg = parallelGeometry(g, innerOff);
+        const outerPg = parallelGeometry(g, outerOff);
+        const { ribbonCapLeadU, ribbonCapLeadMin, cornerU } = TACH_TARGET.stroke;
+        const capLead = Math.max(g.u * ribbonCapLeadU, ribbonCapLeadMin);
+        const sampleDist = Math.max(0, spineDist - capLead);
+        const innerPts = sampleFilletPoints(innerPg, sampleDist, cornerR);
+        const outerPts = sampleFilletPoints(outerPg, sampleDist, cornerR);
+        if (innerPts.length < 1 || outerPts.length < 1) return;
+
+        const cap = ribbonCapPoints(g, spineDist, innerOff, outerOff);
+        innerPts.push(cap.inner);
+        outerPts.push(cap.outer);
+
+        ctx.beginPath();
+        ctx.moveTo(innerPts[0].x, innerPts[0].y);
+        for (let i = 1; i < innerPts.length; i++) {
+            ctx.lineTo(innerPts[i].x, innerPts[i].y);
+        }
+        for (let i = outerPts.length - 1; i >= 0; i--) {
+            ctx.lineTo(outerPts[i].x, outerPts[i].y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+
+    function strokeParallelPath(ctx, g, tEnd, perpOff, lineWidth, color, alpha) {
+        const pg = parallelGeometry(g, perpOff);
+        const cornerR = g.u * TACH_TARGET.stroke.cornerU;
+        traceFilletPath(ctx, pg, tEnd * pg.total, cornerR);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = color;
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function labelOffset(rpm, fontSize, scale) {
+        const { offsetLow, offsetMid, offsetHigh } = TACH_TARGET.labels;
+        if (rpm <= scale.bend1) {
+            return { ox: fontSize * offsetLow.ox, oy: fontSize * offsetLow.oy };
+        }
+        if (rpm <= scale.bend2) {
+            return { ox: fontSize * offsetMid.ox, oy: fontSize * offsetMid.oy };
+        }
+        return { ox: fontSize * offsetHigh.ox, oy: fontSize * offsetHigh.oy };
+    }
+
+    function isLabelFilled(rpm, g) {
+        const fillDist = rpmToDist(displayRpm, g);
+        const labelDist = rpmToDist(rpm, g);
+        return fillDist >= labelDist - g.u * TACH_TARGET.labels.fillLeadU;
+    }
+
+    function drawTachLabels(ctx, g, thickOff, color, shouldDraw) {
+        const scale = tachRpmScale();
+        const fontSize = g.u * TACH_TARGET.labels.fontU;
+        ctx.fillStyle = color;
+        ctx.font = `800 ${fontSize}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        for (const { rpm, text } of scale.labels) {
+            if (!shouldDraw(rpm)) continue;
+            const p = pointOnDistWithOffset(rpmToDist(rpm, g), g, thickOff);
+            const { ox, oy } = labelOffset(rpm, fontSize, scale);
+            ctx.fillText(text, p.x + ox, p.y + oy);
+        }
+    }
+
+    function drawTach() {
+        resizeTach();
+        const w = tachCanvas.width / (window.devicePixelRatio || 1);
+        const h = tachCanvas.height / (window.devicePixelRatio || 1);
+        const g = tachGeometry(w, h);
+        const { thinU, thickU, gapU, cornerU } = TACH_TARGET.stroke;
+        const { dark, light } = getThemeColors();
+        const thinW = g.u * thinU;
+        const thickW = g.u * thickU;
+        const gap = g.u * gapU;
+        const thickOff = -(thickW * 0.5 + gap);
+
+        tachCtx.clearRect(0, 0, w, h);
+
+        strokeParallelPath(tachCtx, g, 1, 0, thinW, dark, 1);
+        drawTachLabels(tachCtx, g, thickOff, dark, (rpm) => !isLabelFilled(rpm, g));
+
+        const cornerR = g.u * cornerU;
+        if (displayRpm > 0) {
+            fillThickRibbon(tachCtx, g, displayRpm, thickOff, thickW, cornerR, dark);
+        }
+
+        drawTachLabels(tachCtx, g, thickOff, light, (rpm) => isLabelFilled(rpm, g));
+    }
+
+    function setBarLevels(container, lit) {
+        const segs = container.children;
+        for (let i = 0; i < segs.length; i++) {
+            segs[i].classList.toggle('on', i < lit);
+        }
+    }
+
+    function updateClock() {
+        const d = new Date();
+        clockText.textContent =
+            String(d.getHours()).padStart(2, '0') + ':' +
+            String(d.getMinutes()).padStart(2, '0');
+    }
+
+    function onResize() {
+        updateUnits();
+        updateGearLayout();
+        drawTach();
+    }
+
+    function tick() {
+        displayRpm += (targetRpm - displayRpm) * 0.2;
+        drawTach();
+        requestAnimationFrame(tick);
+    }
+
+    function updateRpm(rpm) {
+        targetRpm = Math.max(0, Math.min(tachMaxRpm, Math.round(rpm)));
+    }
+
+    function setFuelUnavailable() {
+        setBarLevels(fuelBars, 0);
+        fuelText.textContent = '—';
+        metricFuel.classList.remove('low-fuel');
+    }
+
+    function updateMetrics(speed, gear, temp, fuel) {
+        if (speed != null) {
+            speedText.textContent = String(Math.round(speed));
+        }
+        if (gear != null) {
+            gearText.textContent = gear;
+        }
+        if (temp != null) {
+            const rounded = Math.round(temp);
+            const lit = Math.round(Math.max(0, Math.min(1, rounded / 120)) * TEMP_SEGMENTS);
+            setBarLevels(tempBars, lit);
+            tempText.textContent = rounded + '°C';
+            metricTemp.classList.remove('warn', 'hot');
+            if (rounded >= 110) metricTemp.classList.add('hot');
+            else if (rounded >= 95) metricTemp.classList.add('warn');
+        }
+        if (fuel != null) {
+            const pct = Math.round(fuel);
+            setBarLevels(fuelBars, Math.round(pct / 100 * FUEL_SEGMENTS));
+            fuelText.textContent = pct + '%';
+            metricFuel.classList.toggle('low-fuel', pct <= 15);
+        }
+    }
+
+    let demoFrameId = 0;
+
+    function runDemo() {
+        if (demoFrameId) {
+            cancelAnimationFrame(demoFrameId);
+            demoFrameId = 0;
+        }
+
+        const GEARS = ['N', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+        const SPEEDS = [0, 111, 222, 333, 444, 555, 666, 777, 888, 999];
+        const DURATION_MS = 3000;
+        const TEMP_MAX = 120;
+        const t0 = performance.now();
+
+        function sweepUpDown(t, max) {
+            const phase = t < 0.5 ? t * 2 : (1 - t) * 2;
+            return Math.round(phase * max);
+        }
+
+        function finish() {
+            demoFrameId = 0;
+            targetRpm = 0;
+            displayRpm = 0;
+            updateMetrics(0, 'N', 0, 0);
+            drawTach();
+        }
+
+        function step(now) {
+            const elapsed = now - t0;
+            if (elapsed >= DURATION_MS) {
+                finish();
+                return;
+            }
+
+            const t = elapsed / DURATION_MS;
+            const stepIdx = Math.min(Math.floor(t * GEARS.length), GEARS.length - 1);
+            const rpm = sweepUpDown(t, tachMaxRpm);
+
+            targetRpm = rpm;
+            displayRpm = rpm;
+            updateMetrics(
+                SPEEDS[stepIdx],
+                GEARS[stepIdx],
+                sweepUpDown(t, TEMP_MAX),
+                sweepUpDown(t, 100)
+            );
+
+            demoFrameId = requestAnimationFrame(step);
+        }
+
+        demoFrameId = requestAnimationFrame(step);
+    }
+
+    window.addEventListener('resize', onResize);
+    updateUnits();
+    initSettings();
+    updateGearLayout();
+    updateClock();
+    setInterval(updateClock, 30000);
+    tick();
+
+    // Приложение Signal передаёт кадр телеметрии:
+    // {rpm, speed, gear, temp, fuel, lights, turnLeft, turnRight}
+    // speed — км/ч, temp — °C, fuel — проценты 0…100, gear — "N" или "1"…"9".
+    // lights: 0 выкл, 1 габариты, 2 ближний, 3 дальний.
+    window.onSignalData = function (data) {
+        if (!data) return;
+        if (data.rpm != null && !Number.isNaN(Number(data.rpm))) updateRpm(Number(data.rpm));
+        updateMetrics(
+            data.speed != null ? Number(data.speed) : null,
+            data.gear != null ? String(data.gear) : null,
+            data.temp != null ? Number(data.temp) : null,
+            data.fuel != null ? Number(data.fuel) : null
+        );
+    };
+</script>
+</body>
+</html>

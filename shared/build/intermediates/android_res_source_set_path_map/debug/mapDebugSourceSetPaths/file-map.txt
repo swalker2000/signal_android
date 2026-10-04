@@ -1,0 +1,9 @@
+com.lpkm.signal.shared-pngs-0 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/generated/res/pngs/debug
+com.lpkm.signal.shared-updated_navigation_xml-1 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/generated/updated_navigation_xml/debug
+com.lpkm.signal.shared-mergeDebugResources-2 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
+com.lpkm.signal.shared-mergeDebugResources-3 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
+com.lpkm.signal.shared-debug-4 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/intermediates/merged_res/debug/mergeDebugResources
+com.lpkm.signal.shared-debug-5 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/intermediates/packaged_res/debug/packageDebugResources
+com.lpkm.signal.shared-debug-6 /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/debug/res
+com.lpkm.signal.shared-main-7 /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/res
+gradleHome-0 /private/var/folders/68/dcpcz57x72g7clxs2f755xz00000gn/T/cursor-sandbox-cache/bd1a4d75f666801d7328705877398cf7/gradle
