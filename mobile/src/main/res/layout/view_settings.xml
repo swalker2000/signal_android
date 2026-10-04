@@ -156,15 +156,6 @@
                     android:textSize="18sp"
                     android:textStyle="bold" />
 
-                <TextView
-                    android:id="@+id/html_hint"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/html_hint"
-                    android:textColor="@color/dash_muted"
-                    android:textSize="12sp" />
-
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/load_html"
                     style="@style/Widget.Material3.Button.OutlinedButton"

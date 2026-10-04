@@ -18,7 +18,6 @@
     <string name="telemetry_line">%1$s об/мин · %2$s км/ч · передача %3$s · %4$s · бак %5$s</string>
     <string name="unnamed_device">Без имени</string>
     <string name="selected_device">Выбрано: %1$s</string>
-    <string name="html_hint">Страница получает onSignalData({rpm, speed, gear, temp, fuel, lights, turnLeft, turnRight}). Скорость в км/ч, температура в °C, бак в процентах. Подойдут и updateRpm / updateMetrics.</string>
     <string name="load_html">Загрузить HTML</string>
     <string name="reset_html">Стандартная панель</string>
     <string name="html_invalid">Нужен один HTML-файл панели</string>
