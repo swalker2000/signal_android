@@ -18,7 +18,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.provider.OpenableColumns
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -34,27 +33,35 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.isVisible
 import com.lpkm.signal.databinding.ActivityMainBinding
-import java.io.ByteArrayOutputStream
+import java.net.URI
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
     private val store by lazy { SettingsStore(applicationContext) }
+    private val server = SignalServer()
+    private val io = Executors.newSingleThreadExecutor()
     private lateinit var binding: ActivityMainBinding
     private val handler = Handler(Looper.getMainLooper())
     private val devices = linkedMapOf<String, FoundDevice>()
 
     private var showingDashboard = false
-    private var onFormStep = false
+    private var settingsPage = SettingsPage.MENU
     private var askedPermissions = false
     private var scanning = false
+    private var settingsBusy = false
+    private var ignoreAutostart = false
+    private var ioToken = 0
     private var selectedAddress: String? = null
     private var selectedName: String? = null
-    private var selectedHtml: String? = null
+    private var selectedScreenFile: String? = null
+    private var previewStamp = Long.MIN_VALUE
     private var pageReady = false
     private var loadedStamp = Long.MIN_VALUE
     private var lastPushed: Telemetry? = null
@@ -69,10 +76,6 @@ class MainActivity : AppCompatActivity() {
         pendingPermissionAction = null
         if (result.values.all { it }) action?.invoke()
         else Toast.makeText(this, R.string.permission_needed, Toast.LENGTH_LONG).show()
-    }
-
-    private val htmlPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) importHtml(uri)
     }
 
     private val enableBluetooth = registerForActivityResult(
@@ -136,8 +139,8 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (showingDashboard) return
-                if (onFormStep) {
-                    showBluetoothStep()
+                if (settingsPage != SettingsPage.MENU) {
+                    showSettingsPage(SettingsPage.MENU)
                     return
                 }
                 if (store.isReady()) showDashboard(forceReload = false) else finish()
@@ -152,6 +155,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onDestroy() {
+        ioToken += 1
+        io.shutdownNow()
+        super.onDestroy()
+    }
+
     override fun onStart() {
         super.onStart()
         TelemetryBus.addTelemetryListener(onTelemetry)
@@ -162,7 +171,7 @@ class MainActivity : AppCompatActivity() {
             showLink(TelemetryBus.link)
             binding.settings.telemetryPreview.text = formatTelemetry(TelemetryBus.lastTelemetry)
             refreshAutostartButton()
-            if (waitingForLocation && locationEnabled()) {
+            if (waitingForLocation && locationEnabled() && settingsPage == SettingsPage.BLUETOOTH) {
                 waitingForLocation = false
                 startScan()
             }
@@ -178,12 +187,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun wireControls() {
         binding.dashboard.openSettings.setOnClickListener { showSettings() }
+        binding.settings.menuServer.root.setOnClickListener { showSettingsPage(SettingsPage.SERVER) }
+        binding.settings.menuScreens.root.setOnClickListener { showSettingsPage(SettingsPage.SCREENS) }
+        binding.settings.menuBluetooth.root.setOnClickListener { showSettingsPage(SettingsPage.BLUETOOTH) }
+        binding.settings.menuPanel.root.setOnClickListener { openPanel() }
+        binding.settings.serverBack.setOnClickListener { showSettingsPage(SettingsPage.MENU) }
+        binding.settings.screensBack.setOnClickListener { showSettingsPage(SettingsPage.MENU) }
+        binding.settings.bluetoothBack.setOnClickListener { showSettingsPage(SettingsPage.MENU) }
+        binding.settings.serverSave.setOnClickListener { saveServer(checkConnection = false) }
+        binding.settings.serverCheck.setOnClickListener { saveServer(checkConnection = true) }
+        binding.settings.screensReplace.setOnClickListener { confirmReplaceScreens() }
+        binding.settings.screensMissing.setOnClickListener { downloadScreens(replace = false) }
         binding.settings.scanButton.setOnClickListener { ensurePermissions { startScan() } }
-        binding.settings.loadHtml.setOnClickListener { htmlPicker.launch(arrayOf("*/*")) }
-        binding.settings.resetHtml.setOnClickListener { restoreDefaultHtml() }
-        binding.settings.nextButton.setOnClickListener { showFormStep() }
-        binding.settings.saveSettings.setOnClickListener { saveAndShow() }
-        binding.settings.autostart.setOnCheckedChangeListener { _, _ -> refreshAutostartButton() }
+        binding.settings.autostart.setOnCheckedChangeListener { _, checked ->
+            refreshAutostartButton()
+            if (ignoreAutostart) return@setOnCheckedChangeListener
+            val saved = store.load()
+            if (saved?.deviceAddress.isNullOrBlank()) return@setOnCheckedChangeListener
+            store.saveAutostart(checked)
+            try {
+                setHomeAlias(checked)
+            } catch (error: Exception) {
+                Log.w(TAG, "home alias", error)
+            }
+        }
     }
 
     private fun applyInsets() {
@@ -239,17 +266,314 @@ class MainActivity : AppCompatActivity() {
                 if (sample != null) applyTelemetry(sample)
             }
         }
+        setupPreview()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setupPreview() {
+        val web = binding.settings.screenPreview
+        web.setBackgroundColor(Color.parseColor("#B8BCC6"))
+        web.isVerticalScrollBarEnabled = false
+        web.isHorizontalScrollBarEnabled = false
+        web.overScrollMode = View.OVER_SCROLL_NEVER
+        with(web.settings) {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+            builtInZoomControls = false
+            displayZoomControls = false
+            setSupportZoom(false)
+            mediaPlaybackRequiresUserGesture = true
+            javaScriptCanOpenWindowsAutomatically = false
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                isAlgorithmicDarkeningAllowed = false
+            }
+        }
     }
 
     private fun showSettings() {
         showingDashboard = false
+        stopScan()
         exitImmersive()
         binding.dashboard.root.visibility = View.GONE
         binding.settings.root.visibility = View.VISIBLE
-        selectedAddress = null
-        selectedName = null
-        selectedHtml = null
-        devices.clear()
+        showSettingsPage(SettingsPage.MENU)
+    }
+
+    private fun showSettingsPage(page: SettingsPage) {
+        if (page != settingsPage) {
+            ioToken += 1
+            settingsBusy = false
+        }
+        if (settingsPage == SettingsPage.BLUETOOTH && page != SettingsPage.BLUETOOTH) stopScan()
+        settingsPage = page
+        binding.settings.menuRoot.isVisible = page == SettingsPage.MENU
+        binding.settings.serverPanel.isVisible = page == SettingsPage.SERVER
+        binding.settings.screensPanel.isVisible = page == SettingsPage.SCREENS
+        binding.settings.bluetoothPanel.isVisible = page == SettingsPage.BLUETOOTH
+        when (page) {
+            SettingsPage.MENU -> refreshMenu()
+            SettingsPage.SERVER -> bindServerForm()
+            SettingsPage.SCREENS -> renderScreens()
+            SettingsPage.BLUETOOTH -> openBluetooth()
+        }
+    }
+
+    private fun refreshMenu() {
+        val saved = store.load()
+        val serverStatus = if (store.serverConfigured(saved)) {
+            val host = runCatching { URI(ServerUrls.normalize(saved?.serverUrl.orEmpty())).host }.getOrNull()
+            listOf(saved?.serverLogin.orEmpty(), host.orEmpty()).filter { it.isNotBlank() }.joinToString(" · ")
+        } else {
+            getString(R.string.menu_server_missing)
+        }
+        val screenStatus = if (store.screenConfigured(saved)) {
+            screenLabel(saved?.htmlFile)
+        } else {
+            getString(R.string.menu_screen_missing)
+        }
+        val bluetoothStatus = if (store.bluetoothConfigured(saved)) {
+            saved?.deviceName?.ifBlank { saved.deviceAddress }.orEmpty()
+        } else {
+            getString(R.string.menu_bluetooth_missing)
+        }
+        paintMenu(binding.settings.menuServer, R.string.menu_server, serverStatus, !store.serverConfigured(saved))
+        paintMenu(binding.settings.menuScreens, R.string.menu_screens, screenStatus, !store.screenConfigured(saved))
+        paintMenu(
+            binding.settings.menuBluetooth,
+            R.string.menu_bluetooth,
+            bluetoothStatus,
+            !store.bluetoothConfigured(saved),
+        )
+        paintMenu(binding.settings.menuPanel, R.string.menu_panel, getString(R.string.menu_panel_hint), false)
+    }
+
+    private fun paintMenu(
+        card: com.lpkm.signal.databinding.ItemMenuBinding,
+        title: Int,
+        status: String,
+        alert: Boolean,
+    ) {
+        card.menuTitle.setText(title)
+        card.menuStatus.text = status
+        val color = ContextCompat.getColor(this, if (alert) R.color.dash_alert else R.color.dash_ink)
+        val statusColor = ContextCompat.getColor(this, if (alert) R.color.dash_alert else R.color.dash_muted)
+        card.menuTitle.setTextColor(color)
+        card.menuStatus.setTextColor(statusColor)
+        card.root.setBackgroundResource(if (alert) R.drawable.bg_menu_alert else R.drawable.bg_card)
+    }
+
+    private fun screenLabel(fileName: String?): String {
+        if (fileName.isNullOrBlank()) return getString(R.string.menu_screen_missing)
+        val named = store.listScreens().find { it.fileName == fileName }?.name
+        if (!named.isNullOrBlank()) return named
+        val file = store.dashboardFile(fileName)
+        return if (file.exists()) dashboardTitle(file) else fileName
+    }
+
+    private fun bindServerForm() {
+        val saved = store.load()
+        binding.settings.serverUrl.setText(
+            saved?.serverUrl?.ifBlank { SettingsStore.DEFAULT_SERVER_URL } ?: SettingsStore.DEFAULT_SERVER_URL,
+        )
+        binding.settings.serverLogin.setText(saved?.serverLogin.orEmpty())
+        binding.settings.serverPassword.setText(saved?.serverPassword.orEmpty())
+        binding.settings.serverStatus.setText(R.string.server_status_idle)
+        binding.settings.serverStatus.setTextColor(ContextCompat.getColor(this, R.color.dash_muted))
+        updateBusyUi()
+    }
+
+    private fun saveServer(checkConnection: Boolean) {
+        val url = binding.settings.serverUrl.text?.toString().orEmpty()
+        val login = binding.settings.serverLogin.text?.toString().orEmpty()
+        val password = binding.settings.serverPassword.text?.toString().orEmpty()
+        if (login.isBlank() || password.isBlank()) {
+            showStatus(getString(R.string.server_need_credentials), ok = false)
+            return
+        }
+        if (!checkConnection) {
+            try {
+                store.saveServer(url, login, password)
+                showStatus(getString(R.string.server_saved), ok = true)
+            } catch (_: IllegalArgumentException) {
+                showStatus(getString(R.string.server_bad_url), ok = false)
+            }
+            return
+        }
+        launchIo {
+            val auth = server.authenticate(url, login, password)
+            IoSuccess(getString(R.string.server_ok)) {
+                store.saveServer(url, login, password)
+                store.saveToken(auth.token, auth.expiresInSeconds)
+            }
+        }
+    }
+
+    private fun confirmReplaceScreens() {
+        if (!store.serverConfigured()) {
+            showStatus(getString(R.string.server_need_setup), ok = false)
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.screens_replace_title)
+            .setMessage(R.string.screens_replace_message)
+            .setPositiveButton(R.string.screens_replace_confirm) { _, _ -> downloadScreens(replace = true) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun downloadScreens(replace: Boolean) {
+        if (!store.serverConfigured()) {
+            showStatus(getString(R.string.server_need_setup), ok = false)
+            return
+        }
+        launchIo {
+            val remote = fetchScreens(onlyMissing = !replace)
+            val message = when {
+                !replace && remote.isEmpty() -> getString(R.string.screens_none_missing)
+                else -> getString(R.string.screens_loaded, remote.size)
+            }
+            IoSuccess(message) {
+                if (replace) store.replaceScreens(remote.map { it.toIncoming() })
+                else if (remote.isNotEmpty()) store.addMissingScreens(remote.map { it.toIncoming() })
+            }
+        }
+    }
+
+    private fun fetchScreens(onlyMissing: Boolean): List<RemoteScreen> {
+        var session = openSession(force = false)
+        fun <T> call(block: (Session) -> T): T {
+            return try {
+                block(session)
+            } catch (error: ServerException) {
+                if (!error.unauthorized) throw error
+                session = openSession(force = true)
+                block(session)
+            }
+        }
+        val briefs = call { server.listDisplays(it.base, it.token) }
+        val wanted = if (onlyMissing) {
+            val have = store.listScreens().map { it.id }.toSet()
+            briefs.filter { it.id !in have }
+        } else {
+            briefs
+        }
+        return wanted.map { brief ->
+            call { server.downloadDisplay(it.base, it.token, brief.id) }
+        }
+    }
+
+    private fun openSession(force: Boolean): Session {
+        val settings = store.load()
+        val login = settings?.serverLogin.orEmpty()
+        val password = settings?.serverPassword.orEmpty()
+        if (login.isBlank() || password.isBlank()) {
+            throw ServerException(ServerException.Kind.NEED_CREDENTIALS)
+        }
+        val base = try {
+            ServerUrls.normalize(settings?.serverUrl.orEmpty())
+        } catch (_: IllegalArgumentException) {
+            throw ServerException(ServerException.Kind.BAD_URL)
+        }
+        val token = settings?.accessToken.orEmpty()
+        val expiresAt = settings?.tokenExpiresAt ?: 0L
+        if (!force && token.isNotBlank() && expiresAt > System.currentTimeMillis()) {
+            return Session(base, token)
+        }
+        val auth = server.authenticate(base, login, password)
+        store.saveToken(auth.token, auth.expiresInSeconds)
+        return Session(base, auth.token)
+    }
+
+    private fun launchIo(block: () -> IoSuccess) {
+        if (settingsBusy || isDestroyed) return
+        val token = ++ioToken
+        settingsBusy = true
+        updateBusyUi()
+        showStatus(getString(R.string.loading), ok = true)
+        io.execute {
+            val outcome = try {
+                IoOutcome.Ok(block())
+            } catch (error: Exception) {
+                Log.e(TAG, "server", error)
+                val message = if (error is ServerException) error.text() else getString(R.string.server_failed)
+                IoOutcome.Fail(message)
+            }
+            runOnUiThread {
+                if (token != ioToken || isDestroyed) return@runOnUiThread
+                settingsBusy = false
+                updateBusyUi()
+                when (outcome) {
+                    is IoOutcome.Ok -> {
+                        outcome.result.commit()
+                        if (settingsPage == SettingsPage.SCREENS) renderScreens()
+                        if (outcome.result.message.isNotEmpty()) showStatus(outcome.result.message, ok = true)
+                    }
+                    is IoOutcome.Fail -> showStatus(outcome.message, ok = false)
+                }
+            }
+        }
+    }
+
+    private fun updateBusyUi() {
+        val enabled = !settingsBusy
+        binding.settings.serverSave.isEnabled = enabled
+        binding.settings.serverCheck.isEnabled = enabled
+        binding.settings.screensReplace.isEnabled = enabled
+        binding.settings.screensMissing.isEnabled = enabled
+    }
+
+    private fun showStatus(message: String, ok: Boolean) {
+        val view = when (settingsPage) {
+            SettingsPage.SERVER -> binding.settings.serverStatus
+            SettingsPage.SCREENS -> binding.settings.screensStatus
+            else -> null
+        }
+        view?.text = message
+        view?.setTextColor(ContextCompat.getColor(this, if (ok) R.color.dash_accent else R.color.dash_alert))
+        if (!ok) Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun ServerException.text(): String {
+        return when (kind) {
+            ServerException.Kind.BAD_URL -> getString(R.string.server_bad_url)
+            ServerException.Kind.NEED_CREDENTIALS -> getString(R.string.server_need_setup)
+            ServerException.Kind.UNREACHABLE -> getString(R.string.server_failed)
+            ServerException.Kind.BAD_RESPONSE -> getString(R.string.server_bad_response)
+            ServerException.Kind.HTTP -> serverMessage ?: getString(R.string.server_failed)
+        }
+    }
+
+    private fun RemoteScreen.toIncoming(): SettingsStore.IncomingScreen {
+        return SettingsStore.IncomingScreen(id = id, name = name, version = version, html = html)
+    }
+
+    private fun openPanel() {
+        val saved = store.load()
+        if (!store.screenConfigured(saved)) {
+            Toast.makeText(this, R.string.panel_need_screen, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!store.bluetoothConfigured(saved)) {
+            Toast.makeText(this, R.string.panel_need_bluetooth, Toast.LENGTH_SHORT).show()
+            return
+        }
+        ensurePermissions {
+            try {
+                setHomeAlias(saved?.autostart ?: true)
+            } catch (error: Exception) {
+                Log.w(TAG, "home alias", error)
+            }
+            TelemetryService.start(this, saved?.deviceAddress, saved?.deviceName)
+            showDashboard(forceReload = true)
+        }
+    }
+
+    private fun openBluetooth() {
         loadDraft()
         includeKnownDevices()
         if (selectedAddress.isNullOrBlank()) {
@@ -259,12 +583,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         renderDevices()
-        renderHtml()
         updateSelectionText()
         showLink(TelemetryBus.link)
         binding.settings.telemetryPreview.text = formatTelemetry(TelemetryBus.lastTelemetry)
         refreshAutostartButton()
-        showBluetoothStep()
         val knownAddress = selectedAddress
         val knownName = selectedName
         if (!askedPermissions) {
@@ -297,8 +619,9 @@ class MainActivity : AppCompatActivity() {
         val saved = store.load()
         selectedAddress = saved?.deviceAddress?.takeIf { it.isNotBlank() }
         selectedName = saved?.deviceName?.takeIf { it.isNotBlank() }
-        selectedHtml = saved?.htmlFile ?: SettingsStore.DEFAULT_HTML
+        ignoreAutostart = true
         binding.settings.autostart.isChecked = saved?.autostart ?: true
+        ignoreAutostart = false
     }
 
     private fun seedSelectedDevice() {
@@ -350,6 +673,12 @@ class MainActivity : AppCompatActivity() {
             addChoice(list, device.name, subtitle, device.address == selectedAddress) {
                 selectedAddress = device.address
                 selectedName = device.name
+                store.saveBluetooth(device.address, device.name, binding.settings.autostart.isChecked)
+                try {
+                    setHomeAlias(binding.settings.autostart.isChecked)
+                } catch (error: Exception) {
+                    Log.w(TAG, "home alias", error)
+                }
                 renderDevices()
                 updateSelectionText()
                 ensurePermissions {
@@ -379,25 +708,77 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderHtml() {
-        val list = binding.settings.htmlList
+    private fun renderScreens() {
+        val screens = shownScreens()
+        val savedName = store.load()?.htmlFile
+        if (selectedScreenFile == null || screens.none { it.fileName == selectedScreenFile }) {
+            selectedScreenFile = savedName?.takeIf { name -> screens.any { it.fileName == name } }
+        }
+        val list = binding.settings.screenList
         list.removeAllViews()
-        val files = store.listDashboards()
-        if (selectedHtml == null || files.none { it.name == selectedHtml }) {
-            selectedHtml = files.firstOrNull { it.name == SettingsStore.DEFAULT_HTML }?.name
-                ?: files.firstOrNull()?.name
-        }
-        for (file in files) {
-            val subtitle = if (file.name == SettingsStore.DEFAULT_HTML) {
-                getString(R.string.html_builtin)
+        binding.settings.screensEmpty.isVisible = screens.isEmpty()
+        for (screen in screens) {
+            val subtitle = if (screen.version > 0) {
+                getString(R.string.screens_version, screen.version)
             } else {
-                ""
+                getString(R.string.screens_local)
             }
-            addChoice(list, dashboardTitle(file), subtitle, file.name == selectedHtml) {
-                selectedHtml = file.name
-                renderHtml()
+            addChoice(list, screen.name, subtitle, screen.fileName == selectedScreenFile) {
+                selectedScreenFile = screen.fileName
+                try {
+                    store.selectScreen(screen.fileName)
+                } catch (error: Exception) {
+                    Log.e(TAG, "select screen", error)
+                    Toast.makeText(this, R.string.html_failed, Toast.LENGTH_LONG).show()
+                }
+                renderScreens()
             }
         }
+        showPreview(selectedScreenFile)
+        updateBusyUi()
+    }
+
+    private fun shownScreens(): List<SettingsStore.ScreenEntry> {
+        val catalog = store.listScreens()
+        val active = store.load()?.htmlFile.orEmpty()
+        if (active.isBlank() || catalog.any { it.fileName == active }) return catalog
+        val file = store.dashboardFile(active)
+        if (!file.exists() || file.length() == 0L) return catalog
+        return catalog + SettingsStore.ScreenEntry(
+            id = LOCAL_SCREEN_ID,
+            name = dashboardTitle(file),
+            version = 0,
+            fileName = active,
+        )
+    }
+
+    private fun showPreview(fileName: String?) {
+        val file = fileName?.let { store.dashboardFile(it) }?.takeIf { it.exists() && it.length() > 0L }
+        if (file == null) {
+            previewStamp = Long.MIN_VALUE
+            binding.settings.screenPreviewEmpty.isVisible = true
+            binding.settings.screenPreview.loadUrl("about:blank")
+            return
+        }
+        val stamp = file.lastModified() xor file.length() xor file.name.hashCode().toLong()
+        if (stamp == previewStamp) return
+        val html = try {
+            file.readText(Charsets.UTF_8)
+        } catch (error: Exception) {
+            Log.e(TAG, "preview", error)
+            previewStamp = Long.MIN_VALUE
+            binding.settings.screenPreviewEmpty.isVisible = true
+            return
+        }
+        previewStamp = stamp
+        binding.settings.screenPreviewEmpty.isVisible = false
+        binding.settings.screenPreview.loadDataWithBaseURL(
+            DASHBOARD_ORIGIN,
+            html,
+            "text/html",
+            "utf-8",
+            null,
+        )
     }
 
     private fun addChoice(
@@ -427,90 +808,6 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.link_idle)
         } else {
             getString(R.string.selected_device, selectedName ?: address)
-        }
-        val hasDevice = !address.isNullOrBlank()
-        binding.settings.nextButton.isEnabled = hasDevice
-        binding.settings.saveSettings.isEnabled = hasDevice
-    }
-
-    private fun showBluetoothStep() {
-        onFormStep = false
-        binding.settings.bluetoothPanel.isVisible = true
-        binding.settings.htmlPanel.isVisible = false
-        binding.settings.nextButton.isVisible = true
-        binding.settings.saveSettings.isVisible = false
-    }
-
-    private fun showFormStep() {
-        if (selectedAddress.isNullOrBlank()) {
-            Toast.makeText(this, R.string.save_need_device, Toast.LENGTH_SHORT).show()
-            return
-        }
-        onFormStep = true
-        binding.settings.bluetoothPanel.isVisible = false
-        binding.settings.htmlPanel.isVisible = true
-        binding.settings.nextButton.isVisible = false
-        binding.settings.saveSettings.isVisible = true
-    }
-
-    private fun restoreDefaultHtml() {
-        try {
-            val file = store.restoreDefault()
-            selectedHtml = file.name
-            renderHtml()
-        } catch (error: Exception) {
-            Log.e(TAG, "restore html", error)
-            Toast.makeText(this, R.string.html_failed, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun importHtml(uri: Uri) {
-        try {
-            val name = queryDisplayName(uri)
-            val size = querySize(uri)
-            if (size > 2_000_000) {
-                Toast.makeText(this, R.string.html_invalid, Toast.LENGTH_LONG).show()
-                return
-            }
-            val bytes = readLimited(uri)
-            if (!SettingsStore.looksLikeHtml(bytes, name)) {
-                Toast.makeText(this, R.string.html_invalid, Toast.LENGTH_LONG).show()
-                return
-            }
-            val file = store.importDashboard(bytes, name)
-            selectedHtml = file.name
-            renderHtml()
-        } catch (error: Exception) {
-            Log.e(TAG, "import html", error)
-            Toast.makeText(this, R.string.html_failed, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun saveAndShow() {
-        val address = selectedAddress
-        if (address.isNullOrBlank()) {
-            Toast.makeText(this, R.string.save_need_device, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val html = selectedHtml
-        if (html.isNullOrBlank() || !store.dashboardFile(html).exists()) {
-            Toast.makeText(this, R.string.save_need_html, Toast.LENGTH_SHORT).show()
-            return
-        }
-        ensurePermissions {
-            val settings = store.save(
-                address = address,
-                name = selectedName ?: address,
-                htmlFile = html,
-                autostart = binding.settings.autostart.isChecked,
-            )
-            try {
-                setHomeAlias(settings.autostart)
-            } catch (error: Exception) {
-                Log.w(TAG, "home alias", error)
-            }
-            TelemetryService.start(this, settings.deviceAddress, settings.deviceName)
-            showDashboard(forceReload = true)
         }
     }
 
@@ -768,40 +1065,6 @@ class MainActivity : AppCompatActivity() {
         return manager.isLocationEnabled
     }
 
-    private fun queryDisplayName(uri: Uri): String {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val name = cursor.getString(0)
-                if (!name.isNullOrBlank()) return name
-            }
-        }
-        return "dashboard.html"
-    }
-
-    private fun querySize(uri: Uri): Long {
-        contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst() && !cursor.isNull(0)) return cursor.getLong(0)
-        }
-        return -1L
-    }
-
-    private fun readLimited(uri: Uri): ByteArray {
-        contentResolver.openInputStream(uri)?.use { input ->
-            val output = ByteArrayOutputStream()
-            val chunk = ByteArray(8192)
-            var total = 0
-            while (true) {
-                val count = input.read(chunk)
-                if (count < 0) break
-                total += count
-                if (total > 2_000_000) error("html too large")
-                output.write(chunk, 0, count)
-            }
-            return output.toByteArray()
-        }
-        error("empty html")
-    }
-
     private fun enterImmersive() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -817,9 +1080,26 @@ class MainActivity : AppCompatActivity() {
 
     private data class FoundDevice(val address: String, val name: String, val signal: Boolean)
 
+    private data class Session(val base: String, val token: String)
+
+    private class IoSuccess(val message: String, val commit: () -> Unit = {})
+
+    private sealed class IoOutcome {
+        data class Ok(val result: IoSuccess) : IoOutcome()
+        data class Fail(val message: String) : IoOutcome()
+    }
+
+    private enum class SettingsPage {
+        MENU,
+        SERVER,
+        SCREENS,
+        BLUETOOTH,
+    }
+
     companion object {
         private const val TAG = "Signal"
         private const val DASHBOARD_ORIGIN = "https://signal.local/dashboard/"
+        private const val LOCAL_SCREEN_ID = -1L
 
         private fun jsNumber(value: Double?): String {
             if (value == null || value.isNaN() || value.isInfinite()) return "null"

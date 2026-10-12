@@ -6,4 +6,4 @@ com.lpkm.signal.shared-debug-4 /Users/karpach2000/AndroidStudioProjects/Signal/s
 com.lpkm.signal.shared-debug-5 /Users/karpach2000/AndroidStudioProjects/Signal/shared/build/intermediates/packaged_res/debug/packageDebugResources
 com.lpkm.signal.shared-debug-6 /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/debug/res
 com.lpkm.signal.shared-main-7 /Users/karpach2000/AndroidStudioProjects/Signal/shared/src/main/res
-gradleHome-0 /private/var/folders/68/dcpcz57x72g7clxs2f755xz00000gn/T/cursor-sandbox-cache/bd1a4d75f666801d7328705877398cf7/gradle
+gradleHome-0 /private/var/folders/68/dcpcz57x72g7clxs2f755xz00000gn/T/cursor-sandbox-cache/671709e9a9797cda0d71a27315f201a5/gradle

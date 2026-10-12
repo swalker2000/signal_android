@@ -6,5 +6,6 @@
     <color name="dash_ink">#E8EAED</color>
     <color name="dash_muted">#9AA3AD</color>
     <color name="dash_accent">#FF6600</color>
+    <color name="dash_alert">#FF5A5A</color>
     <color name="dash_card">#242A31</color>
 </resources>

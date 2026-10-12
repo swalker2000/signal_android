@@ -10,6 +10,7 @@ class SettingsStore(context: Context) {
     private val storage = app.createDeviceProtectedStorageContext()
     private val dir = File(storage.filesDir, "signal").apply { mkdirs() }
     private val settingsFile = File(dir, "settings.json")
+    private val screensFile = File(dir, "screens.json")
     val dashboardDir: File = File(dir, "dashboards").apply { mkdirs() }
 
     data class AppSettings(
@@ -17,33 +18,61 @@ class SettingsStore(context: Context) {
         val deviceName: String,
         val htmlFile: String,
         val autostart: Boolean,
+        val serverUrl: String,
+        val serverLogin: String,
+        val serverPassword: String,
+        val accessToken: String,
+        val tokenExpiresAt: Long,
+    )
+
+    data class ScreenEntry(
+        val id: Long,
+        val name: String,
+        val version: Int,
+        val fileName: String,
+    )
+
+    data class IncomingScreen(
+        val id: Long,
+        val name: String,
+        val version: Int,
+        val html: String,
     )
 
     fun load(): AppSettings? {
-        if (!settingsFile.exists()) return null
-        return try {
-            val json = JSONObject(settingsFile.readText(Charsets.UTF_8))
-            AppSettings(
-                deviceAddress = json.optString("deviceAddress"),
-                deviceName = json.optString("deviceName"),
-                htmlFile = json.optString("htmlFile", DEFAULT_HTML).ifBlank { DEFAULT_HTML },
-                autostart = json.optBoolean("autostart", true),
-            )
-        } catch (error: Exception) {
-            Log.e(TAG, "Не удалось прочитать настройки", error)
-            null
+        synchronized(this) {
+            if (!settingsFile.exists()) return null
+            return try {
+                parse(JSONObject(settingsFile.readText(Charsets.UTF_8)))
+            } catch (error: Exception) {
+                Log.e(TAG, "Не удалось прочитать настройки", error)
+                null
+            }
         }
     }
 
-    fun isReady(settings: AppSettings? = load()): Boolean {
-        if (settings == null || settings.deviceAddress.isBlank()) return false
-        val file = dashboardFile(settings.htmlFile)
+    fun serverConfigured(settings: AppSettings? = load()): Boolean {
+        return !settings?.serverLogin.isNullOrBlank() && !settings?.serverPassword.isNullOrBlank()
+    }
+
+    fun screenConfigured(settings: AppSettings? = load()): Boolean {
+        val name = settings?.htmlFile?.takeIf { it.isNotBlank() } ?: return false
+        val file = dashboardFile(name)
         return file.exists() && file.length() > 0L
+    }
+
+    fun bluetoothConfigured(settings: AppSettings? = load()): Boolean {
+        return !settings?.deviceAddress.isNullOrBlank()
+    }
+
+    fun isReady(settings: AppSettings? = load()): Boolean {
+        return bluetoothConfigured(settings) && screenConfigured(settings)
     }
 
     fun activeDashboard(): File? {
         val settings = load() ?: return null
-        return dashboardFile(settings.htmlFile).takeIf { it.exists() && it.length() > 0L }
+        if (!screenConfigured(settings)) return null
+        return dashboardFile(settings.htmlFile)
     }
 
     fun listDashboards(): List<File> {
@@ -84,20 +113,98 @@ class SettingsStore(context: Context) {
         return dest
     }
 
-    fun save(address: String, name: String, htmlFile: String, autostart: Boolean): AppSettings {
-        val settings = AppSettings(
-            deviceAddress = address.trim(),
-            deviceName = name.trim().ifBlank { address.trim() },
-            htmlFile = File(htmlFile).name,
-            autostart = autostart,
-        )
-        val json = JSONObject()
-            .put("deviceAddress", settings.deviceAddress)
-            .put("deviceName", settings.deviceName)
-            .put("htmlFile", settings.htmlFile)
-            .put("autostart", settings.autostart)
-        syncWrite(settingsFile, json.toString(2).toByteArray(Charsets.UTF_8))
-        return settings
+    fun saveBluetooth(address: String, name: String, autostart: Boolean): AppSettings {
+        val trimmed = address.trim()
+        return edit { json ->
+            json.put("deviceAddress", trimmed)
+            json.put("deviceName", name.trim().ifBlank { trimmed })
+            json.put("autostart", autostart)
+        }
+    }
+
+    fun saveAutostart(autostart: Boolean): AppSettings {
+        return edit { json -> json.put("autostart", autostart) }
+    }
+
+    fun saveServer(url: String, login: String, password: String): AppSettings {
+        val normalized = ServerUrls.normalize(url)
+        val trimmedLogin = login.trim()
+        return edit { json ->
+            val changed = json.optString("serverUrl") != normalized ||
+                json.optString("serverLogin") != trimmedLogin ||
+                json.optString("serverPassword") != password
+            json.put("serverUrl", normalized)
+            json.put("serverLogin", trimmedLogin)
+            json.put("serverPassword", password)
+            if (changed) {
+                json.put("accessToken", "")
+                json.put("tokenExpiresAt", 0L)
+            }
+        }
+    }
+
+    fun saveToken(token: String, expiresInSeconds: Long): AppSettings {
+        val lifetime = if (expiresInSeconds > 120) expiresInSeconds - 60 else expiresInSeconds.coerceAtLeast(0)
+        return edit { json ->
+            json.put("accessToken", token)
+            json.put("tokenExpiresAt", System.currentTimeMillis() + lifetime * 1000)
+        }
+    }
+
+    fun selectScreen(fileName: String): AppSettings {
+        val file = dashboardFile(fileName)
+        if (!file.exists() || file.length() == 0L) error("missing screen")
+        return edit { json -> json.put("htmlFile", file.name) }
+    }
+
+    fun listScreens(): List<ScreenEntry> {
+        synchronized(this) {
+        if (!screensFile.exists()) return emptyList()
+        return try {
+            val array = org.json.JSONArray(screensFile.readText(Charsets.UTF_8))
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    val entry = ScreenEntry(
+                        id = item.getLong("id"),
+                        name = item.optString("name").ifBlank { "Экран ${item.getLong("id")}" },
+                        version = item.optInt("version", 1),
+                        fileName = item.getString("fileName"),
+                    )
+                    val file = dashboardFile(entry.fileName)
+                    if (file.exists() && file.length() > 0L) add(entry)
+                }
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Не удалось прочитать список экранов", error)
+            emptyList()
+        }
+        }
+    }
+
+    fun replaceScreens(screens: List<IncomingScreen>): String? = synchronized(this) {
+        val previousId = listScreens().find { it.fileName == load()?.htmlFile }?.id
+        val entries = writeScreens(screens)
+        val keep = entries.map { it.fileName }.toSet()
+        dashboardDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".html", ignoreCase = true) && file.name !in keep) {
+                file.delete()
+            }
+        }
+        writeCatalog(entries)
+        val selected = entries.find { it.id == previousId }?.fileName.orEmpty()
+        edit { json -> json.put("htmlFile", selected) }
+        return selected.ifBlank { null }
+    }
+
+    fun addMissingScreens(screens: List<IncomingScreen>): Int = synchronized(this) {
+        val current = listScreens().toMutableList()
+        val have = current.map { it.id }.toSet()
+        val fresh = screens.filter { it.id !in have }
+        if (fresh.isEmpty()) return 0
+        current += writeScreens(fresh)
+        writeCatalog(current.sortedBy { it.name.lowercase() })
+        return fresh.size
     }
 
     fun dashboardFile(name: String): File {
@@ -106,6 +213,65 @@ class SettingsStore(context: Context) {
             return File(dashboardDir, DEFAULT_HTML)
         }
         return File(dashboardDir, safe)
+    }
+
+    private fun parse(json: JSONObject): AppSettings {
+        return AppSettings(
+            deviceAddress = json.optString("deviceAddress"),
+            deviceName = json.optString("deviceName"),
+            htmlFile = json.optString("htmlFile"),
+            autostart = json.optBoolean("autostart", true),
+            serverUrl = json.optString("serverUrl").ifBlank { DEFAULT_SERVER_URL },
+            serverLogin = json.optString("serverLogin"),
+            serverPassword = json.optString("serverPassword"),
+            accessToken = json.optString("accessToken"),
+            tokenExpiresAt = json.optLong("tokenExpiresAt"),
+        )
+    }
+
+    private fun edit(block: (JSONObject) -> Unit): AppSettings {
+        synchronized(this) {
+            val json = readJson()
+            block(json)
+            syncWrite(settingsFile, json.toString(2).toByteArray(Charsets.UTF_8))
+            return parse(json)
+        }
+    }
+
+    private fun readJson(): JSONObject {
+        if (!settingsFile.exists()) return JSONObject()
+        return try {
+            JSONObject(settingsFile.readText(Charsets.UTF_8))
+        } catch (_: Exception) {
+            JSONObject()
+        }
+    }
+
+    private fun writeScreens(screens: List<IncomingScreen>): List<ScreenEntry> {
+        return screens.map { screen ->
+            val fileName = "screen-${screen.id}.html"
+            syncWrite(File(dashboardDir, fileName), screen.html.toByteArray(Charsets.UTF_8))
+            ScreenEntry(
+                id = screen.id,
+                name = screen.name.ifBlank { "Экран ${screen.id}" },
+                version = screen.version,
+                fileName = fileName,
+            )
+        }
+    }
+
+    private fun writeCatalog(entries: List<ScreenEntry>) {
+        val array = org.json.JSONArray()
+        for (entry in entries) {
+            array.put(
+                JSONObject()
+                    .put("id", entry.id)
+                    .put("name", entry.name)
+                    .put("version", entry.version)
+                    .put("fileName", entry.fileName),
+            )
+        }
+        syncWrite(screensFile, array.toString(2).toByteArray(Charsets.UTF_8))
     }
 
     private fun copyAsset(name: String, dest: File) {
@@ -149,6 +315,7 @@ class SettingsStore(context: Context) {
     companion object {
         private const val TAG = "Signal"
         const val DEFAULT_HTML = "ktm_lcd.html"
+        const val DEFAULT_SERVER_URL = ServerUrls.DEFAULT
 
         fun looksLikeHtml(bytes: ByteArray, name: String): Boolean {
             if (bytes.isEmpty() || bytes.size > 2_000_000) return false
