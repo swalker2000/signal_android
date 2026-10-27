@@ -47,4 +47,46 @@ class TelemetryParserTest {
         val sample = Telemetry().withFrame(frames[0].first, frames[0].second)
         assertEquals("3", sample.gear)
     }
+
+    @Test
+    fun reassemblesVehicleListSplitLikeBle() {
+        val json = """{"vehicles":[{"id":"ktm1190","name":"KTM 1190"},{"id":"ktm1290","name":"KTM 1290"}],"current":"ktm1190"}"""
+        val decoder = BoardDecoder()
+        val replies = ArrayList<String>()
+        var offset = 0
+        while (offset < json.length) {
+            val end = minOf(offset + 20, json.length)
+            replies += decoder.append(json.substring(offset, end).toByteArray(Charsets.US_ASCII)).replies
+            offset = end
+        }
+        assertEquals(listOf(json), replies)
+        val message = parseVehicleReply(replies.single())
+        assertTrue(message is VehicleMessage.Catalog)
+        val catalog = message as VehicleMessage.Catalog
+        assertEquals("ktm1190", catalog.currentId)
+        assertEquals(listOf("KTM 1190", "KTM 1290"), catalog.vehicles.map { it.name })
+    }
+
+    @Test
+    fun keepsJsonApartFromTelemetryFrames() {
+        val decoder = BoardDecoder()
+        val json = """{"ok":true,"id":"husqvarna701","name":"Husqvarna 701"}"""
+        val frame = SignalProtocol.frame(SignalProtocol.SPEED, 82)
+        val mixed = json.take(8).toByteArray(Charsets.US_ASCII) +
+            frame +
+            json.drop(8).toByteArray(Charsets.US_ASCII)
+        val batch = decoder.append(mixed)
+        assertEquals(listOf(SignalProtocol.SPEED to 82), batch.frames)
+        assertEquals(listOf(json), batch.replies)
+        val message = parseVehicleReply(batch.replies.single())
+        assertEquals(VehicleMessage.Current("husqvarna701", "Husqvarna 701"), message)
+    }
+
+    @Test
+    fun readsSelectFailure() {
+        val batch = BoardDecoder().append("""{"ok":false}""".toByteArray(Charsets.US_ASCII))
+        assertEquals(VehicleMessage.Rejected, parseVehicleReply(batch.replies.single()))
+        assertEquals("VSET:ktm1190;", SignalProtocol.vset("ktm1190"))
+        assertEquals(null, SignalProtocol.vset("bad id"))
+    }
 }

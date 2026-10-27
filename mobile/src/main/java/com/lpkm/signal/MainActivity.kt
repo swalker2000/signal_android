@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -68,6 +69,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingTelemetry: Telemetry? = null
     private var pendingPermissionAction: (() -> Unit)? = null
     private var waitingForLocation = false
+    private var pendingVehicleId: String? = null
+    private var askedVehiclesAt = 0L
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -96,6 +99,31 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             if (!showingDashboard) showLink(link)
         }
+    }
+
+    private val onVehicles: (TelemetryBus.Vehicles) -> Unit = {
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            pendingVehicleId = null
+            askedVehiclesAt = 0L
+            handler.removeCallbacks(vehicleWait)
+            if (showingDashboard) return@runOnUiThread
+            if (settingsPage == SettingsPage.MENU) refreshMenu()
+            if (settingsPage == SettingsPage.BLUETOOTH) renderVehicles()
+        }
+    }
+
+    private val onVehicleFailure: () -> Unit = {
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            pendingVehicleId = null
+            Toast.makeText(this, R.string.vehicle_failed, Toast.LENGTH_SHORT).show()
+            if (!showingDashboard && settingsPage == SettingsPage.BLUETOOTH) renderVehicles()
+        }
+    }
+
+    private val vehicleWait = Runnable {
+        if (!isDestroyed && settingsPage == SettingsPage.BLUETOOTH) renderVehicles()
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -165,6 +193,8 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         TelemetryBus.addTelemetryListener(onTelemetry)
         TelemetryBus.addLinkListener(onLink)
+        TelemetryBus.addVehicleListener(onVehicles)
+        TelemetryBus.addVehicleFailureListener(onVehicleFailure)
         if (showingDashboard) {
             TelemetryBus.lastTelemetry?.let { applyTelemetry(it) }
         } else {
@@ -182,6 +212,9 @@ class MainActivity : AppCompatActivity() {
         stopScan()
         TelemetryBus.removeTelemetryListener(onTelemetry)
         TelemetryBus.removeLinkListener(onLink)
+        TelemetryBus.removeVehicleListener(onVehicles)
+        TelemetryBus.removeVehicleFailureListener(onVehicleFailure)
+        handler.removeCallbacks(vehicleWait)
         super.onStop()
     }
 
@@ -337,7 +370,10 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.menu_screen_missing)
         }
         val bluetoothStatus = if (store.bluetoothConfigured(saved)) {
-            saved?.deviceName?.ifBlank { saved.deviceAddress }.orEmpty()
+            val device = saved?.deviceName?.ifBlank { saved.deviceAddress }.orEmpty()
+            val vehicle = TelemetryBus.vehicles.currentName?.takeIf { it.isNotBlank() }
+                ?: saved?.vehicleName?.takeIf { it.isNotBlank() }
+            listOf(device, vehicle).filter { !it.isNullOrBlank() }.joinToString(" · ")
         } else {
             getString(R.string.menu_bluetooth_missing)
         }
@@ -583,6 +619,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         renderDevices()
+        renderVehicles()
         updateSelectionText()
         showLink(TelemetryBus.link)
         binding.settings.telemetryPreview.text = formatTelemetry(TelemetryBus.lastTelemetry)
@@ -671,15 +708,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             addChoice(list, device.name, subtitle, device.address == selectedAddress) {
+                val switching = device.address != selectedAddress
                 selectedAddress = device.address
                 selectedName = device.name
                 store.saveBluetooth(device.address, device.name, binding.settings.autostart.isChecked)
+                if (switching) {
+                    pendingVehicleId = null
+                    askedVehiclesAt = 0L
+                    handler.removeCallbacks(vehicleWait)
+                    TelemetryBus.publishVehicles(TelemetryBus.Vehicles())
+                }
                 try {
                     setHomeAlias(binding.settings.autostart.isChecked)
                 } catch (error: Exception) {
                     Log.w(TAG, "home alias", error)
                 }
                 renderDevices()
+                renderVehicles()
                 updateSelectionText()
                 ensurePermissions {
                     TelemetryService.start(this, device.address, device.name)
@@ -879,6 +924,55 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLink(link: TelemetryBus.Link) {
         binding.settings.linkStatus.text = link.message.ifBlank { getString(R.string.link_idle) }
+        if (settingsPage != SettingsPage.BLUETOOTH) return
+        if (link.status == TelemetryBus.Link.Status.CONNECTED) {
+            TelemetryService.requestVehicles(this)
+            armVehicleWait()
+        }
+        renderVehicles()
+    }
+
+    private fun armVehicleWait() {
+        if (TelemetryBus.vehicles.choices.isNotEmpty()) return
+        if (askedVehiclesAt == 0L) askedVehiclesAt = SystemClock.elapsedRealtime()
+        handler.removeCallbacks(vehicleWait)
+        handler.postDelayed(vehicleWait, 2_600L)
+    }
+
+    private fun renderVehicles() {
+        if (isDestroyed) return
+        val state = TelemetryBus.vehicles
+        val connected = TelemetryBus.link.status == TelemetryBus.Link.Status.CONNECTED
+        val list = binding.settings.vehicleList
+        list.removeAllViews()
+        val hasChoices = state.choices.isNotEmpty()
+        binding.settings.vehicleScroll.isVisible = hasChoices
+        binding.settings.vehicleStatus.isVisible = !hasChoices
+        if (!hasChoices) {
+            val timedOut = connected && askedVehiclesAt != 0L &&
+                SystemClock.elapsedRealtime() - askedVehiclesAt >= 2_500L
+            binding.settings.vehicleStatus.setText(
+                when {
+                    state.loaded || timedOut -> R.string.vehicle_unsupported
+                    connected -> R.string.vehicle_loading
+                    else -> R.string.vehicle_need_link
+                },
+            )
+            return
+        }
+        val selectedId = pendingVehicleId ?: state.currentId
+        for (vehicle in state.choices) {
+            addChoice(list, vehicle.name, "", vehicle.id == selectedId) {
+                if (TelemetryBus.link.status != TelemetryBus.Link.Status.CONNECTED) {
+                    Toast.makeText(this, R.string.vehicle_need_link, Toast.LENGTH_SHORT).show()
+                    return@addChoice
+                }
+                if (vehicle.id == state.currentId) return@addChoice
+                pendingVehicleId = vehicle.id
+                renderVehicles()
+                TelemetryService.selectVehicle(this, vehicle.id)
+            }
+        }
     }
 
     private fun refreshAutostartButton() {

@@ -7,8 +7,17 @@ object TelemetryBus {
         enum class Status { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
     }
 
+    data class Vehicles(
+        val choices: List<VehicleChoice> = emptyList(),
+        val currentId: String? = null,
+        val currentName: String? = null,
+        val loaded: Boolean = false,
+    )
+
     private val telemetryListeners = CopyOnWriteArrayList<(Telemetry) -> Unit>()
     private val linkListeners = CopyOnWriteArrayList<(Link) -> Unit>()
+    private val vehicleListeners = CopyOnWriteArrayList<(Vehicles) -> Unit>()
+    private val vehicleFailureListeners = CopyOnWriteArrayList<() -> Unit>()
 
     @Volatile
     var lastTelemetry: Telemetry? = null
@@ -16,6 +25,10 @@ object TelemetryBus {
 
     @Volatile
     var link: Link = Link(Link.Status.DISCONNECTED, "")
+        private set
+
+    @Volatile
+    var vehicles: Vehicles = Vehicles()
         private set
 
     fun publish(sample: Telemetry) {
@@ -43,5 +56,30 @@ object TelemetryBus {
 
     fun removeLinkListener(listener: (Link) -> Unit) {
         linkListeners.remove(listener)
+    }
+
+    fun publishVehicles(next: Vehicles) {
+        vehicles = next
+        for (listener in vehicleListeners) listener(next)
+    }
+
+    fun publishVehicleFailure() {
+        for (listener in vehicleFailureListeners) listener()
+    }
+
+    fun addVehicleListener(listener: (Vehicles) -> Unit) {
+        vehicleListeners.add(listener)
+    }
+
+    fun removeVehicleListener(listener: (Vehicles) -> Unit) {
+        vehicleListeners.remove(listener)
+    }
+
+    fun addVehicleFailureListener(listener: () -> Unit) {
+        vehicleFailureListeners.add(listener)
+    }
+
+    fun removeVehicleFailureListener(listener: () -> Unit) {
+        vehicleFailureListeners.remove(listener)
     }
 }

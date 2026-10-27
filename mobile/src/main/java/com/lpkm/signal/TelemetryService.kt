@@ -32,7 +32,7 @@ import androidx.core.content.ContextCompat
 
 class TelemetryService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val decoder = FrameDecoder()
+    private val decoder = BoardDecoder()
     private val commands = ArrayDeque<String>()
     private var snapshot = Telemetry()
     private var gatt: BluetoothGatt? = null
@@ -49,6 +49,12 @@ class TelemetryService : Service() {
     private var lastBytes: ByteArray? = null
     private var lastAt = 0L
     private var lastLogAt = 0L
+    private var vehicleBusy = false
+    private var vehicleToken = 0
+    private var vehicleCommand: String? = null
+    private var listNeeded = false
+    private var desiredVehicleId: String? = null
+    private var confirmedVehicleId: String? = null
 
     private val wakeLock by lazy {
         (getSystemService(POWER_SERVICE) as PowerManager)
@@ -109,7 +115,10 @@ class TelemetryService : Service() {
             value: ByteArray,
         ) {
             val copy = value.copyOf()
-            mainHandler.post { ingest(copy) }
+            mainHandler.post {
+                if (gatt != this@TelemetryService.gatt) return@post
+                ingest(copy)
+            }
         }
 
         @Deprecated("Deprecated in Java")
@@ -120,7 +129,10 @@ class TelemetryService : Service() {
         ) {
             val value = characteristic.value ?: return
             val copy = value.copyOf()
-            mainHandler.post { ingest(copy) }
+            mainHandler.post {
+                if (gatt != this@TelemetryService.gatt) return@post
+                ingest(copy)
+            }
         }
 
         override fun onCharacteristicRead(
@@ -131,7 +143,10 @@ class TelemetryService : Service() {
         ) {
             if (status != BluetoothGatt.GATT_SUCCESS) return
             val copy = value.copyOf()
-            mainHandler.post { ingest(copy) }
+            mainHandler.post {
+                if (gatt != this@TelemetryService.gatt) return@post
+                ingest(copy)
+            }
         }
     }
 
@@ -169,6 +184,14 @@ class TelemetryService : Service() {
         if (intent == null && saved?.autostart == true) {
             bringDashboardForward()
         }
+        if (!address.isNullOrBlank() && address != currentAddress) {
+            confirmedVehicleId = null
+            desiredVehicleId = null
+            listNeeded = false
+            TelemetryBus.publishVehicles(TelemetryBus.Vehicles())
+            SettingsStore(this).saveVehicle("", "")
+        }
+        acceptVehicleIntent(intent)
 
         if (address.isNullOrBlank()) {
             TelemetryBus.setLink(TelemetryBus.Link.Status.DISCONNECTED, getString(R.string.link_idle))
@@ -314,6 +337,8 @@ class TelemetryService : Service() {
         TelemetryBus.setLink(TelemetryBus.Link.Status.CONNECTED, message)
         updateNotification(message)
         enqueueCommand(SignalProtocol.CMD_TELM)
+        listNeeded = true
+        pumpVehicle()
         mainHandler.removeCallbacks(pulsRunnable)
         mainHandler.postDelayed(pulsRunnable, 1_000L)
     }
@@ -338,8 +363,110 @@ class TelemetryService : Service() {
 
     private fun enqueueCommand(command: String) {
         if (command == SignalProtocol.CMD_PULS && commands.lastOrNull() == SignalProtocol.CMD_PULS) return
+        if (command == SignalProtocol.CMD_VLST && (commandInFlight == command || commands.contains(command))) return
         commands.addLast(command)
         pumpCommands()
+    }
+
+    private fun acceptVehicleIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_VEHICLES -> listNeeded = true
+            ACTION_SELECT -> {
+                val id = intent.getStringExtra(EXTRA_VEHICLE)?.trim().orEmpty()
+                if (SignalProtocol.vset(id) != null) desiredVehicleId = id
+            }
+            else -> return
+        }
+        pumpVehicle()
+    }
+
+    private fun pumpVehicle() {
+        if (!connected || vehicleBusy) return
+        val desired = desiredVehicleId
+        if (desired != null && desired != confirmedVehicleId) {
+            val command = SignalProtocol.vset(desired) ?: run {
+                desiredVehicleId = null
+                return
+            }
+            startVehicleCommand(command)
+            return
+        }
+        if (listNeeded) {
+            listNeeded = false
+            startVehicleCommand(SignalProtocol.CMD_VLST)
+        }
+    }
+
+    private fun startVehicleCommand(command: String) {
+        vehicleBusy = true
+        vehicleCommand = command
+        val token = ++vehicleToken
+        mainHandler.postDelayed({
+            if (token != vehicleToken || !vehicleBusy) return@postDelayed
+            Log.w(TAG, "плата не ответила на команду мотоцикла")
+            val selectFailed = vehicleCommand?.startsWith("VSET:") == true
+            vehicleCommand = null
+            vehicleBusy = false
+            if (selectFailed) {
+                desiredVehicleId = null
+                TelemetryBus.publishVehicleFailure()
+            }
+            pumpVehicle()
+        }, 2_000L)
+        enqueueCommand(command)
+    }
+
+    private fun finishVehicleCommand() {
+        if (vehicleBusy) {
+            vehicleToken += 1
+            vehicleBusy = false
+            vehicleCommand = null
+        }
+        pumpVehicle()
+    }
+
+    private fun handleReply(raw: String) {
+        when (val message = parseVehicleReply(raw)) {
+            is VehicleMessage.Catalog -> {
+                val name = message.vehicles.firstOrNull { it.id == message.currentId }?.name
+                confirmedVehicleId = message.currentId
+                if (desiredVehicleId == message.currentId) desiredVehicleId = null
+                publishVehicles(message.vehicles, message.currentId, name, loaded = true)
+            }
+            is VehicleMessage.Current -> {
+                confirmedVehicleId = message.id
+                if (desiredVehicleId == message.id) desiredVehicleId = null
+                val choices = TelemetryBus.vehicles.choices.map { choice ->
+                    if (choice.id == message.id) choice.copy(name = message.name) else choice
+                }
+                publishVehicles(choices, message.id, message.name, loaded = choices.isNotEmpty())
+            }
+            VehicleMessage.Rejected -> {
+                desiredVehicleId = null
+                TelemetryBus.publishVehicleFailure()
+            }
+            null -> Log.d(TAG, "непонятный ответ платы: $raw")
+        }
+    }
+
+    private fun publishVehicles(
+        choices: List<VehicleChoice>,
+        currentId: String?,
+        currentName: String?,
+        loaded: Boolean,
+    ) {
+        val name = currentName?.ifBlank { null } ?: choices.firstOrNull { it.id == currentId }?.name
+        TelemetryBus.publishVehicles(
+            TelemetryBus.Vehicles(
+                choices = choices,
+                currentId = currentId,
+                currentName = name,
+                loaded = loaded || TelemetryBus.vehicles.loaded,
+            ),
+        )
+        if (!currentId.isNullOrBlank()) {
+            SettingsStore(this).saveVehicle(currentId, name ?: currentId)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -368,6 +495,9 @@ class TelemetryService : Service() {
         writeBusy = false
         commandInFlight = null
         notifyAttempts = 0
+        vehicleBusy = false
+        vehicleToken += 1
+        vehicleCommand = null
     }
 
     private fun fail(message: String) {
@@ -401,9 +531,13 @@ class TelemetryService : Service() {
         lastBytes = value
         lastAt = now
 
-        val frames = decoder.append(value)
-        if (frames.isEmpty()) return
-        for ((param, sampleValue) in frames) {
+        val batch = decoder.append(value)
+        if (batch.replies.isNotEmpty()) {
+            for (reply in batch.replies) handleReply(reply)
+            finishVehicleCommand()
+        }
+        if (batch.frames.isEmpty()) return
+        for ((param, sampleValue) in batch.frames) {
             snapshot = snapshot.withFrame(param, sampleValue)
         }
         if (now - lastLogAt > 1_000) {
@@ -519,6 +653,9 @@ class TelemetryService : Service() {
         private const val NOTIFICATION_ID = 42
         private const val EXTRA_ADDRESS = "address"
         private const val EXTRA_NAME = "name"
+        private const val EXTRA_VEHICLE = "vehicle"
+        private const val ACTION_VEHICLES = "com.lpkm.signal.VEHICLES"
+        private const val ACTION_SELECT = "com.lpkm.signal.SELECT_VEHICLE"
         private val RETRY = Any()
         private val TIMEOUT = Any()
 
@@ -550,6 +687,18 @@ class TelemetryService : Service() {
                 intent.putExtra(EXTRA_ADDRESS, address)
                 intent.putExtra(EXTRA_NAME, name)
             }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun requestVehicles(context: Context) {
+            val intent = Intent(context, TelemetryService::class.java).setAction(ACTION_VEHICLES)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun selectVehicle(context: Context, id: String) {
+            val intent = Intent(context, TelemetryService::class.java)
+                .setAction(ACTION_SELECT)
+                .putExtra(EXTRA_VEHICLE, id)
             ContextCompat.startForegroundService(context, intent)
         }
     }

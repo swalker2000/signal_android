@@ -23,6 +23,8 @@ class SettingsStore(context: Context) {
         val serverPassword: String,
         val accessToken: String,
         val tokenExpiresAt: Long,
+        val vehicleId: String,
+        val vehicleName: String,
     )
 
     data class ScreenEntry(
@@ -116,9 +118,21 @@ class SettingsStore(context: Context) {
     fun saveBluetooth(address: String, name: String, autostart: Boolean): AppSettings {
         val trimmed = address.trim()
         return edit { json ->
+            val changed = json.optString("deviceAddress") != trimmed
             json.put("deviceAddress", trimmed)
             json.put("deviceName", name.trim().ifBlank { trimmed })
             json.put("autostart", autostart)
+            if (changed) {
+                json.put("vehicleId", "")
+                json.put("vehicleName", "")
+            }
+        }
+    }
+
+    fun saveVehicle(id: String, name: String): AppSettings {
+        return edit { json ->
+            json.put("vehicleId", id.trim())
+            json.put("vehicleName", name.trim())
         }
     }
 
@@ -226,6 +240,8 @@ class SettingsStore(context: Context) {
             serverPassword = json.optString("serverPassword"),
             accessToken = json.optString("accessToken"),
             tokenExpiresAt = json.optLong("tokenExpiresAt"),
+            vehicleId = json.optString("vehicleId"),
+            vehicleName = json.optString("vehicleName"),
         )
     }
 

@@ -46,6 +46,15 @@ object SignalProtocol {
 
     const val CMD_TELM = "TELM"
     const val CMD_PULS = "PULS"
+    const val CMD_VLST = "VLST"
+    const val CMD_VGET = "VGET"
+
+    private val VEHICLE_ID = Regex("[A-Za-z0-9_-]{1,24}")
+
+    fun vset(id: String): String? {
+        if (!VEHICLE_ID.matches(id)) return null
+        return "VSET:$id;"
+    }
 
     fun frame(param: Int, value: Int): ByteArray {
         return byteArrayOf(
@@ -92,6 +101,125 @@ class FrameDecoder {
             pending.subList(0, pending.size - 8).clear()
         }
         return frames
+    }
+}
+
+data class VehicleChoice(val id: String, val name: String)
+
+sealed class VehicleMessage {
+    data class Catalog(val vehicles: List<VehicleChoice>, val currentId: String?) : VehicleMessage()
+    data class Current(val id: String, val name: String) : VehicleMessage()
+    data object Rejected : VehicleMessage()
+}
+
+fun parseVehicleReply(raw: String): VehicleMessage? {
+    val text = raw.trim()
+    if (!text.startsWith("{") || !text.endsWith("}")) return null
+    val ok = Regex(""""ok"\s*:\s*(true|false)""").find(text)?.groupValues?.get(1)
+    if (ok == "false") return VehicleMessage.Rejected
+    if (text.contains("\"vehicles\"")) {
+        val vehicles = Regex(""""id"\s*:\s*"([^"]*)"\s*,\s*"name"\s*:\s*"([^"]*)"""")
+            .findAll(text)
+            .map { match ->
+                val id = match.groupValues[1].trim()
+                if (id.isEmpty()) return@map null
+                VehicleChoice(id, match.groupValues[2].trim().ifBlank { id })
+            }
+            .filterNotNull()
+            .toList()
+        return VehicleMessage.Catalog(vehicles, jsonString(text, "current"))
+    }
+    val id = jsonString(text, "id") ?: return if (ok == "true") VehicleMessage.Rejected else null
+    return VehicleMessage.Current(id, jsonString(text, "name") ?: id)
+}
+
+private fun jsonString(json: String, key: String): String? {
+    val match = Regex(""""$key"\s*:\s*"([^"]*)"""").find(json) ?: return null
+    return match.groupValues[1].trim().ifBlank { null }
+}
+
+class BoardDecoder {
+    private val pending = ArrayList<Byte>()
+    private val text = StringBuilder()
+
+    data class Batch(
+        val frames: List<Pair<Int, Int>> = emptyList(),
+        val replies: List<String> = emptyList(),
+    )
+
+    fun reset() {
+        pending.clear()
+        text.clear()
+    }
+
+    fun append(data: ByteArray): Batch {
+        data.forEach { pending.add(it) }
+        val frames = ArrayList<Pair<Int, Int>>()
+        val replies = ArrayList<String>()
+        while (pending.isNotEmpty()) {
+            val head = pending[0].toInt() and 0xFF
+            if (head == SignalProtocol.STX) {
+                if (pending.size < SignalProtocol.FRAME_LEN) break
+                if ((pending[4].toInt() and 0xFF) != SignalProtocol.STP) {
+                    pending.removeAt(0)
+                    continue
+                }
+                val param = pending[1].toInt() and 0xFF
+                val raw = ((pending[2].toInt() and 0xFF) shl 8) or (pending[3].toInt() and 0xFF)
+                repeat(SignalProtocol.FRAME_LEN) { pending.removeAt(0) }
+                frames.add(param to raw.toShort().toInt())
+                continue
+            }
+            val byte = pending.removeAt(0).toInt() and 0xFF
+            if (byte in 0x20..0x7E) {
+                text.append(byte.toChar())
+                if (text.length > 1024) text.delete(0, text.length - 512)
+            }
+        }
+        replies += takeMessages()
+        return Batch(frames, replies)
+    }
+
+    private fun takeMessages(): List<String> {
+        val found = ArrayList<String>()
+        while (true) {
+            val start = text.indexOf('{')
+            if (start < 0) {
+                if (text.length > 128) text.clear()
+                break
+            }
+            if (start > 0) text.delete(0, start)
+            val end = jsonEnd(text) ?: break
+            found.add(text.substring(0, end))
+            text.delete(0, end)
+        }
+        return found
+    }
+
+    private fun jsonEnd(source: CharSequence): Int? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (index in source.indices) {
+            val ch = source[index]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    ch == '\\' -> escaped = true
+                    ch == '"' -> inString = false
+                }
+                continue
+            }
+            when (ch) {
+                '"' -> inString = true
+                '{' -> depth += 1
+                '}' -> {
+                    depth -= 1
+                    if (depth == 0) return index + 1
+                }
+            }
+        }
+        return null
     }
 }
 

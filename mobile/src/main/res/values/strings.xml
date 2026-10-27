@@ -1,6 +1,8 @@
 <resources>
     <string name="app_name">Signal</string>
     <string name="section_bluetooth">Плата Bluetooth</string>
+    <string name="section_vehicle">Мотоцикл</string>
+    <string name="section_devices">Устройства</string>
     <string name="section_html">Форма панели</string>
     <string name="scan">Поиск устройств</string>
     <string name="scanning">Поиск…</string>
@@ -84,4 +86,8 @@
     <string name="preview_empty">Выберите экран, чтобы увидеть его</string>
     <string name="panel_need_screen">Сначала выберите экран</string>
     <string name="panel_need_bluetooth">Сначала выберите плату Bluetooth</string>
+    <string name="vehicle_need_link">Подключитесь к плате, чтобы выбрать мотоцикл</string>
+    <string name="vehicle_loading">Запрашиваю список мотоциклов…</string>
+    <string name="vehicle_unsupported">Плата не прислала список мотоциклов</string>
+    <string name="vehicle_failed">Не удалось переключить мотоцикл</string>
 </resources>
