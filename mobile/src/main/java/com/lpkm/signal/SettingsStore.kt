@@ -82,6 +82,43 @@ class SettingsStore(context: Context) {
         return dashboardFile(settings.htmlFile)
     }
 
+    fun installedScreenFiles(): List<String> {
+        try {
+            ensureBundledDashboards()
+        } catch (error: Exception) {
+            Log.e(TAG, "Не удалось подготовить панели", error)
+        }
+        val catalog = listScreens().map { it.fileName }
+        val extras = dashboardDir.listFiles { file ->
+            file.isFile && file.name.endsWith(".html", ignoreCase = true)
+        }?.map { it.name }?.sortedBy { it.lowercase() }.orEmpty()
+        return (catalog + extras).distinct().filter { name ->
+            val file = dashboardFile(name)
+            file.exists() && file.length() > 0L
+        }
+    }
+
+    // D1 шагает вперёд, D2 — назад. step = +1 или -1.
+    fun switchScreen(step: Int): String? {
+        if (step == 0) return null
+        val names = installedScreenFiles()
+        if (names.size < 2) return null
+        val current = load()?.htmlFile
+        val index = names.indexOf(current)
+        val next = if (index < 0) {
+            if (step > 0) names.first() else names.last()
+        } else {
+            names[Math.floorMod(index + step, names.size)]
+        }
+        if (next == current) return null
+        return try {
+            selectScreen(next).htmlFile
+        } catch (error: Exception) {
+            Log.e(TAG, "Не удалось переключить экран", error)
+            null
+        }
+    }
+
     fun listDashboards(): List<File> {
         try {
             ensureBundledDashboards()

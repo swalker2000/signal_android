@@ -31,6 +31,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
 class TelemetryService : Service() {
+    private val store by lazy { SettingsStore(this) }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val decoder = BoardDecoder()
     private val commands = ArrayDeque<String>()
@@ -58,6 +59,7 @@ class TelemetryService : Service() {
     private var usbTransport = false
     private var usbHold = false
     private lateinit var usb: UsbBoard
+    private val lastButtonAt = LongArray(3)
 
     private val wakeLock by lazy {
         (getSystemService(POWER_SERVICE) as PowerManager)
@@ -583,9 +585,18 @@ class TelemetryService : Service() {
             finishVehicleCommand()
         }
         if (batch.frames.isEmpty()) return
+        var telemetryChanged = false
         for ((param, sampleValue) in batch.frames) {
-            snapshot = snapshot.withFrame(param, sampleValue)
+            when (param) {
+                SignalProtocol.BUTTON_1 -> if (sampleValue != 0) onBoardButton(1)
+                SignalProtocol.BUTTON_2 -> if (sampleValue != 0) onBoardButton(2)
+                else -> {
+                    snapshot = snapshot.withFrame(param, sampleValue)
+                    telemetryChanged = true
+                }
+            }
         }
+        if (!telemetryChanged) return
         if (now - lastLogAt > 1_000) {
             lastLogAt = now
             Log.d(TAG, "telemetry rpm=${snapshot.rpm} speed=${snapshot.speed} gear=${snapshot.gear}")
@@ -594,6 +605,16 @@ class TelemetryService : Service() {
             )
         }
         TelemetryBus.publish(snapshot)
+    }
+
+    private fun onBoardButton(which: Int) {
+        if (which != 1 && which != 2) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastButtonAt[which] < BUTTON_GAP_MS) return
+        lastButtonAt[which] = now
+        val file = store.switchScreen(if (which == 1) 1 else -1) ?: return
+        Log.i(TAG, "кнопка $which → $file")
+        TelemetryBus.publishScreen(file)
     }
 
     @SuppressLint("MissingPermission")
@@ -773,6 +794,7 @@ class TelemetryService : Service() {
         private const val TAG = "Signal"
         private const val CHANNEL_ID = "signal_link"
         private const val NOTIFICATION_ID = 42
+        private const val BUTTON_GAP_MS = 80L
         private const val EXTRA_ADDRESS = "address"
         private const val EXTRA_NAME = "name"
         private const val EXTRA_VEHICLE = "vehicle"

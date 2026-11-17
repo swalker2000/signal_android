@@ -67,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private var previewStamp = Long.MIN_VALUE
     private var pageReady = false
     private var loadedStamp = Long.MIN_VALUE
+    private var loadedName: String? = null
     private var lastPushed: Telemetry? = null
     private var pendingTelemetry: Telemetry? = null
     private var pendingPermissionAction: (() -> Unit)? = null
@@ -121,6 +122,23 @@ class MainActivity : AppCompatActivity() {
             pendingVehicleId = null
             Toast.makeText(this, R.string.vehicle_failed, Toast.LENGTH_SHORT).show()
             if (!showingDashboard && settingsPage == SettingsPage.BLUETOOTH) renderVehicles()
+        }
+    }
+
+    private val onScreen: (String) -> Unit = { fileName ->
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            selectedScreenFile = fileName
+            if (showingDashboard) {
+                val file = store.dashboardFile(fileName)
+                if (file.exists() && file.length() > 0L) loadDashboard(force = true, file)
+                return@runOnUiThread
+            }
+            when (settingsPage) {
+                SettingsPage.SCREENS -> renderScreens()
+                SettingsPage.MENU -> refreshMenu()
+                else -> Unit
+            }
         }
     }
 
@@ -208,8 +226,14 @@ class MainActivity : AppCompatActivity() {
         TelemetryBus.addLinkListener(onLink)
         TelemetryBus.addVehicleListener(onVehicles)
         TelemetryBus.addVehicleFailureListener(onVehicleFailure)
+        TelemetryBus.addScreenListener(onScreen)
         if (showingDashboard) {
-            TelemetryBus.lastTelemetry?.let { applyTelemetry(it) }
+            val file = store.activeDashboard()
+            if (file != null && file.name != loadedName) {
+                loadDashboard(force = true, file)
+            } else {
+                TelemetryBus.lastTelemetry?.let { applyTelemetry(it) }
+            }
         } else {
             showLink(TelemetryBus.link)
             binding.settings.telemetryPreview.text = formatTelemetry(TelemetryBus.lastTelemetry)
@@ -227,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         TelemetryBus.removeLinkListener(onLink)
         TelemetryBus.removeVehicleListener(onVehicles)
         TelemetryBus.removeVehicleFailureListener(onVehicleFailure)
+        TelemetryBus.removeScreenListener(onScreen)
         handler.removeCallbacks(vehicleWait)
         super.onStop()
     }
@@ -817,17 +842,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shownScreens(): List<SettingsStore.ScreenEntry> {
-        val catalog = store.listScreens()
-        val active = store.load()?.htmlFile.orEmpty()
-        if (active.isBlank() || catalog.any { it.fileName == active }) return catalog
-        val file = store.dashboardFile(active)
-        if (!file.exists() || file.length() == 0L) return catalog
-        return catalog + SettingsStore.ScreenEntry(
-            id = LOCAL_SCREEN_ID,
-            name = dashboardTitle(file),
-            version = 0,
-            fileName = active,
-        )
+        val catalog = store.listScreens().associateBy { it.fileName }
+        return store.installedScreenFiles().map { name ->
+            catalog[name] ?: SettingsStore.ScreenEntry(
+                id = LOCAL_SCREEN_ID,
+                name = dashboardTitle(store.dashboardFile(name)),
+                version = 0,
+                fileName = name,
+            )
+        }
     }
 
     private fun showPreview(fileName: String?) {
@@ -905,6 +928,7 @@ class MainActivity : AppCompatActivity() {
         }
         pageReady = false
         loadedStamp = stamp
+        loadedName = file.name
         lastPushed = null
         binding.dashboard.dashboardWeb.loadDataWithBaseURL(
             DASHBOARD_ORIGIN,

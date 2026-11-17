@@ -89,4 +89,29 @@ class TelemetryParserTest {
         assertEquals("VSET:ktm1190;", SignalProtocol.vset("ktm1190"))
         assertEquals(null, SignalProtocol.vset("bad id"))
     }
+
+    @Test
+    fun buttonFramesAreSeparateFromTelemetry() {
+        val decoder = BoardDecoder()
+        val burst = SignalProtocol.frame(SignalProtocol.BUTTON_1, 1) +
+            SignalProtocol.frame(SignalProtocol.SPEED, 10) +
+            SignalProtocol.frame(SignalProtocol.BUTTON_2, 1)
+        val batch = decoder.append(burst)
+        assertEquals(
+            listOf(
+                SignalProtocol.BUTTON_1 to 1,
+                SignalProtocol.SPEED to 10,
+                SignalProtocol.BUTTON_2 to 1,
+            ),
+            batch.frames,
+        )
+        var sample = Telemetry()
+        batch.frames.forEach { (param, value) ->
+            if (param != SignalProtocol.BUTTON_1 && param != SignalProtocol.BUTTON_2) {
+                sample = sample.withFrame(param, value)
+            }
+        }
+        assertEquals(10.0, sample.speed)
+        assertTrue(sample.rpm == null)
+    }
 }

@@ -43,6 +43,8 @@ object SignalProtocol {
     const val LIGHTS = 0x06
     const val TURN_LEFT = 0x07
     const val TURN_RIGHT = 0x08
+    const val BUTTON_1 = 0x09
+    const val BUTTON_2 = 0x0A
 
     const val CMD_TELM = "TELM"
     const val CMD_PULS = "PULS"

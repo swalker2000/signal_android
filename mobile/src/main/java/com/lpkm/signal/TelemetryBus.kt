@@ -18,6 +18,7 @@ object TelemetryBus {
     private val linkListeners = CopyOnWriteArrayList<(Link) -> Unit>()
     private val vehicleListeners = CopyOnWriteArrayList<(Vehicles) -> Unit>()
     private val vehicleFailureListeners = CopyOnWriteArrayList<() -> Unit>()
+    private val screenListeners = CopyOnWriteArrayList<(String) -> Unit>()
 
     @Volatile
     var lastTelemetry: Telemetry? = null
@@ -81,5 +82,17 @@ object TelemetryBus {
 
     fun removeVehicleFailureListener(listener: () -> Unit) {
         vehicleFailureListeners.remove(listener)
+    }
+
+    fun publishScreen(fileName: String) {
+        for (listener in screenListeners) listener(fileName)
+    }
+
+    fun addScreenListener(listener: (String) -> Unit) {
+        screenListeners.add(listener)
+    }
+
+    fun removeScreenListener(listener: (String) -> Unit) {
+        screenListeners.remove(listener)
     }
 }
