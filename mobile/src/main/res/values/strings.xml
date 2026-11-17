@@ -9,6 +9,9 @@
     <string name="link_idle">Плата не выбрана</string>
     <string name="status_connecting">Подключение к %1$s…</string>
     <string name="status_connected">Подключено к %1$s</string>
+    <string name="status_usb">Подключено по USB</string>
+    <string name="status_usb_waiting">Жду ответ платы по USB…</string>
+    <string name="status_usb_logs">Плата выводит логи по USB. Перезапустите её при открытом приложении.</string>
     <string name="status_disconnected">Связь потеряна, повторяю подключение…</string>
     <string name="status_error">Ошибка Bluetooth (%1$d)</string>
     <string name="bt_disabled">Bluetooth выключен</string>
@@ -29,6 +32,7 @@
     <string name="save">Сохранить и показать панель</string>
     <string name="save_need_device">Сначала выберите плату</string>
     <string name="save_need_html">Сначала выберите HTML-форму</string>
+    <string name="usb_link">Подключение по USB</string>
     <string name="autostart">Запускать при включении устройства</string>
     <string name="autostart_battery">Отключить оптимизацию батареи</string>
     <string name="autostart_fullscreen">Разрешить показ при включении</string>
@@ -85,8 +89,9 @@
     <string name="screens_local">сохранённый экран</string>
     <string name="preview_empty">Выберите экран, чтобы увидеть его</string>
     <string name="panel_need_screen">Сначала выберите экран</string>
-    <string name="panel_need_bluetooth">Сначала выберите плату Bluetooth</string>
+    <string name="panel_need_bluetooth">Сначала подключите плату по Bluetooth или USB</string>
     <string name="vehicle_need_link">Подключитесь к плате, чтобы выбрать мотоцикл</string>
+    <string name="vehicle_usb_waiting">Жду плату по USB, затем покажу мотоциклы</string>
     <string name="vehicle_loading">Запрашиваю список мотоциклов…</string>
     <string name="vehicle_unsupported">Плата не прислала список мотоциклов</string>
     <string name="vehicle_failed">Не удалось переключить мотоцикл</string>

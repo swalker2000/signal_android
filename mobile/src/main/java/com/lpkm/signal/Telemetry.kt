@@ -48,6 +48,9 @@ object SignalProtocol {
     const val CMD_PULS = "PULS"
     const val CMD_VLST = "VLST"
     const val CMD_VGET = "VGET"
+    const val USB_PROBE = "SIGNAL?"
+    const val USB_ACK = "ANDR"
+    const val USB_READY = "USB"
 
     private val VEHICLE_ID = Regex("[A-Za-z0-9_-]{1,24}")
 

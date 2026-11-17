@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.ComponentName
 import android.content.Intent
+import android.hardware.usb.UsbManager
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -58,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private var scanning = false
     private var settingsBusy = false
     private var ignoreAutostart = false
+    private var ignoreUsbLink = false
     private var ioToken = 0
     private var selectedAddress: String? = null
     private var selectedName: String? = null
@@ -181,6 +183,17 @@ class MainActivity : AppCompatActivity() {
         } else {
             showSettings()
         }
+        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            TelemetryService.start(this)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            TelemetryService.start(this)
+        }
     }
 
     override fun onDestroy() {
@@ -232,6 +245,15 @@ class MainActivity : AppCompatActivity() {
         binding.settings.screensReplace.setOnClickListener { confirmReplaceScreens() }
         binding.settings.screensMissing.setOnClickListener { downloadScreens(replace = false) }
         binding.settings.scanButton.setOnClickListener { ensurePermissions { startScan() } }
+        binding.settings.usbLink.setOnCheckedChangeListener { _, checked ->
+            if (ignoreUsbLink) return@setOnCheckedChangeListener
+            store.saveUsbLink(checked)
+            askedVehiclesAt = 0L
+            handler.removeCallbacks(vehicleWait)
+            TelemetryService.start(this, selectedAddress, selectedName)
+            renderVehicles()
+            refreshMenu()
+        }
         binding.settings.autostart.setOnCheckedChangeListener { _, checked ->
             refreshAutostartButton()
             if (ignoreAutostart) return@setOnCheckedChangeListener
@@ -369,13 +391,18 @@ class MainActivity : AppCompatActivity() {
         } else {
             getString(R.string.menu_screen_missing)
         }
-        val bluetoothStatus = if (store.bluetoothConfigured(saved)) {
-            val device = saved?.deviceName?.ifBlank { saved.deviceAddress }.orEmpty()
-            val vehicle = TelemetryBus.vehicles.currentName?.takeIf { it.isNotBlank() }
-                ?: saved?.vehicleName?.takeIf { it.isNotBlank() }
-            listOf(device, vehicle).filter { !it.isNullOrBlank() }.joinToString(" · ")
-        } else {
-            getString(R.string.menu_bluetooth_missing)
+        val usbUp = TelemetryBus.link.status == TelemetryBus.Link.Status.CONNECTED &&
+            TelemetryBus.link.message == getString(R.string.status_usb)
+        val bluetoothStatus = when {
+            usbUp -> getString(R.string.status_usb)
+            saved?.usbLink == true -> getString(R.string.status_usb_waiting)
+            store.bluetoothConfigured(saved) -> {
+                val device = saved?.deviceName?.ifBlank { saved.deviceAddress }.orEmpty()
+                val vehicle = TelemetryBus.vehicles.currentName?.takeIf { it.isNotBlank() }
+                    ?: saved?.vehicleName?.takeIf { it.isNotBlank() }
+                listOf(device, vehicle).filter { !it.isNullOrBlank() }.joinToString(" · ")
+            }
+            else -> getString(R.string.menu_bluetooth_missing)
         }
         paintMenu(binding.settings.menuServer, R.string.menu_server, serverStatus, !store.serverConfigured(saved))
         paintMenu(binding.settings.menuScreens, R.string.menu_screens, screenStatus, !store.screenConfigured(saved))
@@ -383,7 +410,7 @@ class MainActivity : AppCompatActivity() {
             binding.settings.menuBluetooth,
             R.string.menu_bluetooth,
             bluetoothStatus,
-            !store.bluetoothConfigured(saved),
+            !store.linkConfigured(saved) && !usbUp,
         )
         paintMenu(binding.settings.menuPanel, R.string.menu_panel, getString(R.string.menu_panel_hint), false)
     }
@@ -594,7 +621,9 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.panel_need_screen, Toast.LENGTH_SHORT).show()
             return
         }
-        if (!store.bluetoothConfigured(saved)) {
+        val usbUp = TelemetryBus.link.status == TelemetryBus.Link.Status.CONNECTED &&
+            TelemetryBus.link.message == getString(R.string.status_usb)
+        if (!store.linkConfigured(saved) && !usbUp) {
             Toast.makeText(this, R.string.panel_need_bluetooth, Toast.LENGTH_SHORT).show()
             return
         }
@@ -626,15 +655,16 @@ class MainActivity : AppCompatActivity() {
         refreshAutostartButton()
         val knownAddress = selectedAddress
         val knownName = selectedName
+        val useUsb = binding.settings.usbLink.isChecked
         if (!askedPermissions) {
             askedPermissions = true
             ensurePermissions {
-                if (!knownAddress.isNullOrBlank()) {
+                if (useUsb || !knownAddress.isNullOrBlank()) {
                     TelemetryService.start(this, knownAddress, knownName)
                 }
                 startScan()
             }
-        } else if (!knownAddress.isNullOrBlank()) {
+        } else if (useUsb || !knownAddress.isNullOrBlank()) {
             ensurePermissions { TelemetryService.start(this, knownAddress, knownName) }
         }
     }
@@ -657,8 +687,11 @@ class MainActivity : AppCompatActivity() {
         selectedAddress = saved?.deviceAddress?.takeIf { it.isNotBlank() }
         selectedName = saved?.deviceName?.takeIf { it.isNotBlank() }
         ignoreAutostart = true
+        ignoreUsbLink = true
         binding.settings.autostart.isChecked = saved?.autostart ?: true
+        binding.settings.usbLink.isChecked = saved?.usbLink == true
         ignoreAutostart = false
+        ignoreUsbLink = false
     }
 
     private fun seedSelectedDevice() {
@@ -955,6 +988,7 @@ class MainActivity : AppCompatActivity() {
                 when {
                     state.loaded || timedOut -> R.string.vehicle_unsupported
                     connected -> R.string.vehicle_loading
+                    binding.settings.usbLink.isChecked -> R.string.vehicle_usb_waiting
                     else -> R.string.vehicle_need_link
                 },
             )
@@ -1016,12 +1050,14 @@ class MainActivity : AppCompatActivity() {
                 Uri.parse("package:$packageName"),
             )
         }
-        val notifications = getSystemService(android.app.NotificationManager::class.java)
-        if (notifications != null && !notifications.canUseFullScreenIntent()) {
-            return Intent(
-                Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
-                Uri.parse("package:$packageName"),
-            )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val notifications = getSystemService(android.app.NotificationManager::class.java)
+            if (notifications != null && !notifications.canUseFullScreenIntent()) {
+                return Intent(
+                    Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                    Uri.parse("package:$packageName"),
+                )
+            }
         }
         if (!isDefaultHome()) return Intent(Settings.ACTION_HOME_SETTINGS)
         return null

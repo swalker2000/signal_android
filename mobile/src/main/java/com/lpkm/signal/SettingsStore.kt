@@ -18,6 +18,7 @@ class SettingsStore(context: Context) {
         val deviceName: String,
         val htmlFile: String,
         val autostart: Boolean,
+        val usbLink: Boolean,
         val serverUrl: String,
         val serverLogin: String,
         val serverPassword: String,
@@ -67,8 +68,12 @@ class SettingsStore(context: Context) {
         return !settings?.deviceAddress.isNullOrBlank()
     }
 
+    fun linkConfigured(settings: AppSettings? = load()): Boolean {
+        return bluetoothConfigured(settings) || settings?.usbLink == true
+    }
+
     fun isReady(settings: AppSettings? = load()): Boolean {
-        return bluetoothConfigured(settings) && screenConfigured(settings)
+        return linkConfigured(settings) && screenConfigured(settings)
     }
 
     fun activeDashboard(): File? {
@@ -138,6 +143,10 @@ class SettingsStore(context: Context) {
 
     fun saveAutostart(autostart: Boolean): AppSettings {
         return edit { json -> json.put("autostart", autostart) }
+    }
+
+    fun saveUsbLink(enabled: Boolean): AppSettings {
+        return edit { json -> json.put("usbLink", enabled) }
     }
 
     fun saveServer(url: String, login: String, password: String): AppSettings {
@@ -235,6 +244,7 @@ class SettingsStore(context: Context) {
             deviceName = json.optString("deviceName"),
             htmlFile = json.optString("htmlFile"),
             autostart = json.optBoolean("autostart", true),
+            usbLink = json.optBoolean("usbLink", false),
             serverUrl = json.optString("serverUrl").ifBlank { DEFAULT_SERVER_URL },
             serverLogin = json.optString("serverLogin"),
             serverPassword = json.optString("serverPassword"),

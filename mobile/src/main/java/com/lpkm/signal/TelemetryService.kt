@@ -55,6 +55,9 @@ class TelemetryService : Service() {
     private var listNeeded = false
     private var desiredVehicleId: String? = null
     private var confirmedVehicleId: String? = null
+    private var usbTransport = false
+    private var usbHold = false
+    private lateinit var usb: UsbBoard
 
     private val wakeLock by lazy {
         (getSystemService(POWER_SERVICE) as PowerManager)
@@ -157,6 +160,8 @@ class TelemetryService : Service() {
         running = true
         ensureChannel(this)
         if (!wakeLock.isHeld) wakeLock.acquire()
+        usb = UsbBoard(this, usbListener)
+        usb.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -192,6 +197,31 @@ class TelemetryService : Service() {
             SettingsStore(this).saveVehicle("", "")
         }
         acceptVehicleIntent(intent)
+        if (usbTransport) {
+            if (!address.isNullOrBlank()) {
+                currentAddress = address
+                currentName = name ?: address
+            }
+            return START_STICKY
+        }
+
+        if (saved?.usbLink == true) {
+            if (!usbHold) {
+                usbHold = true
+                closeGatt()
+                connecting = false
+                connected = false
+            }
+            if (!usbTransport) {
+                TelemetryBus.setLink(
+                    TelemetryBus.Link.Status.CONNECTING,
+                    getString(R.string.status_usb_waiting),
+                )
+                updateNotification(getString(R.string.status_usb_waiting))
+            }
+            return START_STICKY
+        }
+        usbHold = false
 
         if (address.isNullOrBlank()) {
             TelemetryBus.setLink(TelemetryBus.Link.Status.DISCONNECTED, getString(R.string.link_idle))
@@ -209,6 +239,7 @@ class TelemetryService : Service() {
         running = false
         mainHandler.removeCallbacksAndMessages(RETRY)
         mainHandler.removeCallbacksAndMessages(TIMEOUT)
+        if (::usb.isInitialized) usb.stop()
         closeGatt()
         if (wakeLock.isHeld) wakeLock.release()
         super.onDestroy()
@@ -216,7 +247,7 @@ class TelemetryService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun beginConnect() {
-        if (!running) return
+        if (!running || usbTransport) return
         mainHandler.removeCallbacksAndMessages(RETRY)
         mainHandler.removeCallbacksAndMessages(TIMEOUT)
         closeGatt()
@@ -261,7 +292,7 @@ class TelemetryService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun handleConnection(gatt: BluetoothGatt, status: Int, newState: Int) {
-        if (gatt != this.gatt) return
+        if (usbTransport || gatt != this.gatt) return
         if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
             mainHandler.removeCallbacksAndMessages(TIMEOUT)
             val link = gatt
@@ -333,7 +364,11 @@ class TelemetryService : Service() {
         connected = true
         mainHandler.removeCallbacksAndMessages(TIMEOUT)
         mainHandler.removeCallbacksAndMessages(RETRY)
-        val message = getString(R.string.status_connected, currentName ?: currentAddress.orEmpty())
+        val message = if (usbTransport) {
+            getString(R.string.status_usb)
+        } else {
+            getString(R.string.status_connected, currentName ?: currentAddress.orEmpty())
+        }
         TelemetryBus.setLink(TelemetryBus.Link.Status.CONNECTED, message)
         updateNotification(message)
         enqueueCommand(SignalProtocol.CMD_TELM)
@@ -472,6 +507,17 @@ class TelemetryService : Service() {
     @SuppressLint("MissingPermission")
     private fun pumpCommands() {
         if (writeBusy || !connected) return
+        if (usbTransport) {
+            while (commands.isNotEmpty()) {
+                val command = commands.removeFirst()
+                if (!usb.write(command.toByteArray(Charsets.US_ASCII))) {
+                    commands.addFirst(command)
+                    mainHandler.postDelayed(pumpRetry, 200L)
+                    return
+                }
+            }
+            return
+        }
         val link = gatt ?: return
         val rx = rxChar ?: return
         val command = commands.removeFirstOrNull() ?: return
@@ -509,7 +555,7 @@ class TelemetryService : Service() {
     }
 
     private fun scheduleRetry() {
-        if (!running || currentAddress.isNullOrBlank()) return
+        if (usbTransport || !running || currentAddress.isNullOrBlank()) return
         mainHandler.removeCallbacksAndMessages(RETRY)
         mainHandler.postDelayed({ beginConnect() }, RETRY, 3_000L)
     }
@@ -640,6 +686,82 @@ class TelemetryService : Service() {
             characteristic.value = value
             gatt.writeCharacteristic(characteristic)
         }
+    }
+
+    private val usbListener = object : UsbBoard.Listener {
+        override fun onPortOpen() {
+            mainHandler.post { onUsbWaiting() }
+        }
+
+        override fun onSessionUp() {
+            mainHandler.post { onUsbSession() }
+        }
+
+        override fun onLogMode() {
+            mainHandler.post { onUsbLogs() }
+        }
+
+        override fun onPortClosed() {
+            mainHandler.post { onUsbDown() }
+        }
+
+        override fun onBytes(data: ByteArray) {
+            val copy = data.copyOf()
+            mainHandler.post { if (usbTransport) ingest(copy) }
+        }
+    }
+
+    private fun onUsbWaiting() {
+        if (!running || usbTransport || connected || connecting) return
+        TelemetryBus.setLink(TelemetryBus.Link.Status.CONNECTING, getString(R.string.status_usb_waiting))
+        updateNotification(getString(R.string.status_usb_waiting))
+    }
+
+    private fun onUsbLogs() {
+        if (!running || usbTransport || connected || connecting) return
+        TelemetryBus.setLink(TelemetryBus.Link.Status.DISCONNECTED, getString(R.string.status_usb_logs))
+        updateNotification(getString(R.string.status_usb_logs))
+    }
+
+    private fun onUsbSession() {
+        if (!running) return
+        if (usbTransport && connected) {
+            decoder.reset()
+            enqueueCommand(SignalProtocol.CMD_TELM)
+            return
+        }
+        usbTransport = true
+        mainHandler.removeCallbacksAndMessages(RETRY)
+        mainHandler.removeCallbacksAndMessages(TIMEOUT)
+        closeGatt()
+        connecting = false
+        decoder.reset()
+        snapshot = Telemetry()
+        markConnected()
+    }
+
+    private fun onUsbDown() {
+        if (!running || !usbTransport) return
+        usbTransport = false
+        connected = false
+        connecting = false
+        stopSession()
+        decoder.reset()
+        snapshot = Telemetry()
+        if (SettingsStore(this).load()?.usbLink == true) {
+            TelemetryBus.setLink(
+                TelemetryBus.Link.Status.CONNECTING,
+                getString(R.string.status_usb_waiting),
+            )
+            updateNotification(getString(R.string.status_usb_waiting))
+            return
+        }
+        if (!currentAddress.isNullOrBlank()) {
+            beginConnect()
+            return
+        }
+        TelemetryBus.setLink(TelemetryBus.Link.Status.DISCONNECTED, getString(R.string.link_idle))
+        updateNotification(getString(R.string.notif_waiting))
     }
 
     private fun bluetoothAdapter(): BluetoothAdapter? {

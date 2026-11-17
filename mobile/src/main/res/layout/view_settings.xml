@@ -401,6 +401,14 @@
             </LinearLayout>
 
             <com.google.android.material.checkbox.MaterialCheckBox
+                android:id="@+id/usb_link"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/usb_link"
+                android:textColor="@color/dash_ink" />
+
+            <com.google.android.material.checkbox.MaterialCheckBox
                 android:id="@+id/autostart"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
